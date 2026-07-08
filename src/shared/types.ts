@@ -333,12 +333,10 @@ export interface IpcApi {
     listModels: () => Promise<string[]>
   }
   session: {
-    /** Open dialog that auto-detects a Qbort tickets.json (→ new working file) or a *.qval.json
-     *  (→ load working file, relinking its dataset). Returns null if cancelled. */
+    /** Open dialog that auto-detects a Qbort tickets.json (→ fresh working file, discarding the
+     *  current one) or a *.qval.json (→ load working file, relinking its dataset). This is also how
+     *  you start over under new criteria: re-open the tickets.json. Returns null if cancelled. */
     open: () => Promise<SessionSnapshot | null>
-    /** Start a fresh evaluation: pick a tickets.json only, discarding the current working file so
-     *  schema/rules/provider become editable again. Returns null if cancelled. */
-    newEvaluation: () => Promise<SessionSnapshot | null>
     /** Silently reload the last working file + its dataset on launch, if both are available. */
     loadLast: () => Promise<SessionSnapshot | null>
     /** Write the working file (Save-As dialog if it has no path yet). Returns the path or null. */
@@ -379,7 +377,6 @@ export const IpcChannels = {
   ollamaListModels: 'ollama:listModels',
   anthropicListModels: 'anthropic:listModels',
   sessionOpen: 'session:open',
-  sessionNewEvaluation: 'session:newEvaluation',
   sessionLoadLast: 'session:loadLast',
   sessionSave: 'session:save',
   sessionAddComparison: 'session:addComparison',

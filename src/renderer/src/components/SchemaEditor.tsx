@@ -128,7 +128,8 @@ export function SchemaEditor() {
       {locked ? (
         <LockNotice>
           Schema is locked — this file already has evaluations, so its scoring criteria are frozen to keep every
-          score comparable. Start a <span className="font-bold text-ink">New</span> evaluation to change the schema.
+          score comparable. <span className="font-bold text-ink">Open</span> its tickets.json to start a fresh
+          evaluation with a different schema.
         </LockNotice>
       ) : null}
       <fieldset disabled={locked} className={cn('m-0 space-y-3 border-0 p-0', locked && 'opacity-60')}>

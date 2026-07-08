@@ -199,24 +199,6 @@ export class Workspace {
     return this.snapshot()!
   }
 
-  /** NEW EVALUATION: pick a tickets.json only and start a fresh (editable) working file (spec §3). */
-  async newEvaluation(sender: Electron.WebContents): Promise<SessionSnapshot | null> {
-    const s = await this.settings.get()
-    const res = await showOpen(sender, {
-      title: 'New evaluation — choose a tickets.json',
-      defaultPath: resolveDefaultDir(s.defaultDir, this.userData),
-      filters: [{ name: 'Tickets JSON', extensions: ['json'] }],
-      properties: ['openFile']
-    })
-    const path = res.filePaths[0]
-    if (res.canceled || !path) return null
-
-    const raw = await readJson(path)
-    const parsed = raw ? parseTicketsFile(raw) : null
-    if (!parsed) throw new Error('That file is not a tickets.json (a Qbort ticket export).')
-    return this.importDataset(parsed.tickets, parsed.source, path)
-  }
-
   /** Find tickets matching `fingerprint`: already-loaded → lastDatasetPath → prompt the user. */
   private async locateDataset(
     sender: Electron.WebContents,

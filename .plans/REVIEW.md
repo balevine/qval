@@ -152,6 +152,16 @@ Baseline before: 130 tests. After these fixes: **134 tests**, typecheck clean.
   `EvaluateModal` counts. Extracted `needsAttention(result)` to `shared/evalFile.ts`; both callers use
   it. Test added. (Remaining second-review items G3/G4/G5/N1–N4 not addressed — out of scope for now.)
 
+## Follow-ups (2026-07-08)
+
+- [x] **Removed the NEW top-bar button** (added in A1) — it was redundant with OPEN. OPEN already
+  starts a fresh working file when given a `tickets.json` (identical `importDataset` path, `workingPath`
+  reset so the first save prompts), so it's also the config-lock escape hatch. Removed the whole dead
+  chain (`TopBar` button + `onNew`, `App.newEvaluation`, `preload.session.newEvaluation`,
+  `IpcApi`/`IpcChannels.sessionNewEvaluation`, the `sessionNewEvaluation` handler, and
+  `Workspace.newEvaluation`). Lock notices (Schema/Rules/Provider) + README + PROJECT_SPEC (§3/§4/§10/§13/§16)
+  reworded to point at re-opening the `tickets.json`. 134 tests green, typecheck clean.
+
 ## Progress
 
 **Done (2026-07-05 → 07-08):** A1 (config authoritative + lock + New evaluation), A2 (descoped LLM-value editing),

@@ -32,7 +32,6 @@ const api: IpcApi = {
   },
   session: {
     open: () => ipcRenderer.invoke(IpcChannels.sessionOpen),
-    newEvaluation: () => ipcRenderer.invoke(IpcChannels.sessionNewEvaluation),
     loadLast: () => ipcRenderer.invoke(IpcChannels.sessionLoadLast),
     save: () => ipcRenderer.invoke(IpcChannels.sessionSave),
     addComparison: () => ipcRenderer.invoke(IpcChannels.sessionAddComparison),

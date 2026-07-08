@@ -101,10 +101,6 @@ export function registerIpcHandlers(): void {
     assertIdle()
     return workspace.open(e.sender)
   })
-  ipcMain.handle(IpcChannels.sessionNewEvaluation, (e) => {
-    assertIdle()
-    return workspace.newEvaluation(e.sender)
-  })
   ipcMain.handle(IpcChannels.sessionLoadLast, () => workspace.loadLast())
   ipcMain.handle(IpcChannels.sessionSave, (e) => workspace.save(e.sender))
   ipcMain.handle(IpcChannels.sessionAddComparison, (e) => {

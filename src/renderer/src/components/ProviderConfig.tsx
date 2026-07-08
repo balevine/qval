@@ -121,7 +121,8 @@ export function ProviderConfig() {
       {locked ? (
         <LockNotice>
           Provider &amp; model are locked — this file already has LLM scores, and every ticket in a run must use
-          the same model. Start a <span className="font-bold text-ink">New</span> evaluation to use a different one.
+          the same model. <span className="font-bold text-ink">Open</span> its tickets.json to start a fresh
+          evaluation with a different model.
         </LockNotice>
       ) : null}
       <fieldset disabled={locked} className={cn('m-0 space-y-4 border-0 p-0', locked && 'opacity-60')}>

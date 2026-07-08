@@ -53,18 +53,6 @@ function AppShell() {
     }
   }
 
-  const newEvaluation = async () => {
-    try {
-      const next = await window.api.session.newEvaluation()
-      if (next) {
-        setSession(next)
-        toast(`New evaluation — ${formatInt(next.tickets.length)} tickets`)
-      }
-    } catch (e) {
-      toast(errorMessage(e, 'Could not start a new evaluation'), 'error')
-    }
-  }
-
   const exportFile = async () => {
     try {
       const path = await window.api.session.save()
@@ -95,7 +83,6 @@ function AppShell() {
         hasDataset={hasDataset}
         busy={busy}
         onOpen={open}
-        onNew={newEvaluation}
         onEvaluate={() => setEvaluateOpen(true)}
         onMerge={merge}
         onExport={exportFile}

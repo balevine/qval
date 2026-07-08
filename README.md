@@ -46,7 +46,7 @@ Handy scripts: `npm test` (unit + integration suite), `npm run typecheck`.
 
 ## Usage
 
-The app is a single screen: a results table in the middle, and a top bar with **NEW**, **OPEN**, **EVALUATE**, **MERGE**, **EXPORT**, and settings (gear icon). All configuration lives behind the gear.
+The app is a single screen: a results table in the middle, and a top bar with **OPEN**, **EVALUATE**, **MERGE**, **EXPORT**, and settings (gear icon). All configuration lives behind the gear.
 
 ### 1. Load a ticket set
 
@@ -71,7 +71,7 @@ Under the gear:
 - **Rules** - a free-form text block telling the evaluator *how* to score (prose, definitions, scoring philosophy, edge cases). Injected verbatim into the LLM prompt and shown next to the human form. **Preview compiled prompt** shows exactly what gets sent to the model.
 - **Schema** - the ordered, typed properties every ticket is scored on. Each property has a `label`, a `key`, a `type` (**score**, **boolean**, **enum**, or **text**), an optional **Allow multiple** toggle (multi-select, for enum/score), and a `description` shown to both the human and the LLM. Ships with a small default schema so you can start immediately.
 
-> **Config lock:** once an evaluation has any real score, its schema, rules, and (after an LLM run) provider/model **freeze** so a file's data can never contradict the config it declares. To score under different criteria or a different model, use **NEW** to start a fresh evaluation from a `tickets.json`.
+> **Config lock:** once an evaluation has any real score, its schema, rules, and (after an LLM run) provider/model **freeze** so a file's data can never contradict the config it declares. To score under different criteria or a different model, **OPEN** its `tickets.json` again to start a fresh evaluation.
 
 ### 4. Run an LLM evaluation
 

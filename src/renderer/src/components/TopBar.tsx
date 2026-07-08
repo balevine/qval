@@ -1,4 +1,4 @@
-import { Download, FilePlus2, FolderOpen, GitMerge, Settings, Sparkles } from 'lucide-react'
+import { Download, FolderOpen, GitMerge, Settings, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 interface TopBarProps {
@@ -7,8 +7,6 @@ interface TopBarProps {
   /** True while an LLM run is in flight — the working file is read-only, so file actions are disabled. */
   busy: boolean
   onOpen: () => void
-  /** Start a fresh evaluation from a tickets.json, unloading the current (possibly locked) file. */
-  onNew: () => void
   onEvaluate: () => void
   onMerge: () => void
   onExport: () => void
@@ -16,11 +14,12 @@ interface TopBarProps {
 }
 
 /**
- * Single-page top bar: title on the left; NEW, OPEN, EVALUATE, MERGE, EXPORT, and settings on the
- * right (see spec §13). EVALUATE is the primary (solid) action. While a run is in flight, actions
- * that would change or swap the working file are disabled (the run has exclusive access).
+ * Single-page top bar: title on the left; OPEN, EVALUATE, MERGE, EXPORT, and settings on the right
+ * (see spec §13). OPEN auto-detects a tickets.json (fresh evaluation) or a *.qval.json (resume one);
+ * EVALUATE is the primary (solid) action. While a run is in flight, actions that would change or
+ * swap the working file are disabled (the run has exclusive access).
  */
-export function TopBar({ hasDataset, busy, onOpen, onNew, onEvaluate, onMerge, onExport, onOpenSettings }: TopBarProps) {
+export function TopBar({ hasDataset, busy, onOpen, onEvaluate, onMerge, onExport, onOpenSettings }: TopBarProps) {
   const busyTitle = busy ? 'Disabled while an evaluation is running' : undefined
   return (
     <header className="flex items-center justify-between border-b-2 border-ink bg-paper px-5 py-3">
@@ -34,10 +33,6 @@ export function TopBar({ hasDataset, busy, onOpen, onNew, onEvaluate, onMerge, o
       </div>
 
       <div className="flex items-center gap-2">
-        <Button variant="outline" onClick={onNew} disabled={busy} title={busyTitle}>
-          <FilePlus2 className="h-4 w-4" />
-          New
-        </Button>
         <Button variant="outline" onClick={onOpen} disabled={busy} title={busyTitle}>
           <FolderOpen className="h-4 w-4" />
           Open

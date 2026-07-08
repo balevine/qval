@@ -129,7 +129,7 @@ export function humanEvaluatedCount(file: EvalFile): number {
 // --- Config lock (spec §3/§4) ------------------------------------------------
 // A file's config (schema + rules) and the model that produced it are frozen once real scores
 // exist, so the file's snapshot/fingerprint can never disagree with how its data was produced.
-// The escape hatch is starting a New evaluation from a fresh tickets.json.
+// The escape hatch is re-opening the tickets.json, which starts a fresh (unlocked) working file.
 
 /** A result counts as "scored" once it carries at least one non-empty value (error/empty ≠ scored). */
 export function isScoredResult(r: EvalResult): boolean {

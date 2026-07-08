@@ -39,6 +39,7 @@ Batched, per-ticket output. `EvaluationService.start` → orchestrator splits ti
 - Every module in `shared/` and `main/` ships a colocated `*.test.ts` (**Vitest**). Tests are deterministic: no real network (providers mocked), `safeStorage` faked, and `rng`/`now`/`sleep` are injectable — keep them that way. Fingerprint and aggregate reducers are pure and exhaustively tested.
 - Prefer pure, testable helpers; keep side effects (fs, fetch, Electron) at the edges. Writes go through `fsUtil.atomicWriteJson`.
 - Comments explain **why**, not what; match the surrounding density.
+- When writing comments and markdown files, prefer periods and parenthesis over semi-colons and em-dashes.
 
 ## Visual design
 
