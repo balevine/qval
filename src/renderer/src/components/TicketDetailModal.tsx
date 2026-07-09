@@ -74,7 +74,7 @@ export function TicketDetailModal({ tickets, index, onIndexChange }: TicketDetai
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onIndexChange(null)}>
       <DialogContent className="h-[86vh] max-w-5xl">
-        <DialogHeader className="flex items-center justify-between gap-4">
+        <DialogHeader className="flex items-center justify-between gap-4 pr-14">
           <div className="min-w-0">
             <div className="font-mono text-sm font-bold uppercase tracking-widest">
               #{ticket.id} · {ticket.status}
