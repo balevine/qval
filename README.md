@@ -4,6 +4,8 @@ A local-first desktop app for **evaluating** customer support tickets with an LL
 
 Multiple people's eval files of the same dataset can be **merged** to produce per-ticket means, distributions, and a **human-vs-LLM comparison** showing how closely the model tracks human judgment. Everything runs on your machine; the only network egress is the LLM call itself.
 
+![Qval evaluating a ticket set, showing the LLM-vs-human comparison table](docs/screenshot.png)
+
 **Highlights**
 
 - Two providers: **Ollama** (local, default) and **Anthropic**.
