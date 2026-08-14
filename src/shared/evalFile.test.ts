@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest'
 import {
   applyHumanValues,
   applyLlmResults,
+  CLAUDE_CODE_PROVIDER,
   configLocked,
   createWorkingFile,
   evaluatedCount,
   humanEvaluatedCount,
+  isExternalLlmProvider,
+  llmRunBlockReason,
   lockedLlmProvider,
   looksLikeEvalFile,
   needsAttention,
@@ -216,5 +219,47 @@ describe('config / provider lock (spec §3/§4)', () => {
     expect(configLocked(f)).toBe(true)
     expect(providerLocked(f)).toBe(true)
     expect(lockedLlmProvider(f)).toEqual({ provider: 'ollama', model: 'llama3.1' })
+  })
+})
+
+describe('externally-scored files (spec §18)', () => {
+  const now = '2026-07-03T00:00:00.000Z'
+  const scored = (provider: string, model: string): EvalFile =>
+    applyLlmResults(working(), {
+      provider,
+      model,
+      results: [{ ticketId: 1, values: { empathy: 4 }, evaluatedAt: now, error: null }]
+    })
+
+  it('isExternalLlmProvider is true only for a provider the app has no adapter for', () => {
+    expect(isExternalLlmProvider('ollama')).toBe(false)
+    expect(isExternalLlmProvider('anthropic')).toBe(false)
+    expect(isExternalLlmProvider(CLAUDE_CODE_PROVIDER)).toBe(true)
+    expect(isExternalLlmProvider('openai')).toBe(true)
+    expect(isExternalLlmProvider(undefined)).toBe(false)
+    expect(isExternalLlmProvider('')).toBe(false)
+  })
+
+  it('a skill-produced file blocks the in-app run, naming the CLI', () => {
+    expect(llmRunBlockReason(scored(CLAUDE_CODE_PROVIDER, 'Opus 5'))).toMatch(/Claude Code skill.*CLI/)
+  })
+
+  it('another unknown provider blocks too, quoting what produced it', () => {
+    expect(llmRunBlockReason(scored('openai', 'gpt-x'))).toMatch(/"openai"/)
+  })
+
+  it('app-produced, unscored, and absent files never block', () => {
+    expect(llmRunBlockReason(scored('ollama', 'llama3.1'))).toBeNull()
+    expect(llmRunBlockReason(scored('anthropic', 'claude-x'))).toBeNull()
+    // Only a *scored* LLM evaluator pins a provider, so an error-only skill file stays runnable.
+    const errored = applyLlmResults(working(), {
+      provider: CLAUDE_CODE_PROVIDER,
+      model: 'Opus 5',
+      results: [{ ticketId: 1, values: {}, evaluatedAt: now, error: 'boom' }]
+    })
+    expect(llmRunBlockReason(errored)).toBeNull()
+    expect(llmRunBlockReason(working())).toBeNull()
+    expect(llmRunBlockReason(null)).toBeNull()
+    expect(llmRunBlockReason(undefined)).toBeNull()
   })
 })

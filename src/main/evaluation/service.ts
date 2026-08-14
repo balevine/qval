@@ -7,7 +7,13 @@ import type {
   Settings,
   Ticket
 } from '@shared/types'
-import { applyLlmResults, LLM_EVALUATOR_ID, lockedLlmProvider, needsAttention } from '@shared/evalFile'
+import {
+  applyLlmResults,
+  llmRunBlockReason,
+  LLM_EVALUATOR_ID,
+  lockedLlmProvider,
+  needsAttention
+} from '@shared/evalFile'
 import type { ProviderId } from '@shared/types'
 import type { SettingsStore } from '../settings'
 import type { SecretStore } from '../secrets'
@@ -83,6 +89,8 @@ export class EvaluationService {
     await this.workspace.ensureConfigStamped()
     const file = this.workspace.currentWorkingFile()
     if (!file) throw new Error('No dataset loaded.')
+    const blocked = llmRunBlockReason(file)
+    if (blocked) throw new Error(blocked)
     const targets = selectTargets(mode, this.workspace.currentTickets(), file)
     return estimateRun(effectiveConfig(settings, file), targets, runParams(settings).batchSize)
   }
@@ -98,6 +106,10 @@ export class EvaluationService {
 
   async start(mode: RunMode, onProgress: (p: EvaluationProgress) => void): Promise<EvalRunResult> {
     if (this.active) throw new Error('An evaluation is already running.')
+    // Enforced here, not only in the modal, so bypassing the UI can't mix a second model into the
+    // file's one `llm` evaluator.
+    const blocked = llmRunBlockReason(this.workspace.currentWorkingFile())
+    if (blocked) throw new Error(blocked)
     const controller = new AbortController()
     this.active = controller
     try {

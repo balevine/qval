@@ -8,6 +8,9 @@
     "forceConsistentCasingInFileNames": true,
     "strict": true,
     "skipLibCheck": true,
+    // The skill's `lib/*.mjs` ports are plain JS with no types; `allowJs` lets test/skillParity.test.ts
+    // import them (inferred, not type-checked; `checkJs` stays off).
+    "allowJs": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "types": ["node"],
@@ -20,6 +23,8 @@
     "electron.vite.config.ts",
     "src/main/**/*.ts",
     "src/preload/**/*.ts",
-    "src/shared/**/*.ts"
+    "src/shared/**/*.ts",
+    "test/**/*.ts",
+    ".claude/skills/**/*.mjs"
   ]
 }

@@ -14,7 +14,7 @@ import { useSettings } from '@/state/SettingsContext'
 import { useSession } from '@/state/SessionContext'
 import { useSecretStatus } from '@/lib/useSecretStatus'
 import { useToast } from '@/state/ToastContext'
-import { providerLocked } from '@shared/evalFile'
+import { CLAUDE_CODE_PROVIDER, lockedLlmProvider, providerLocked } from '@shared/evalFile'
 import {
   ALL_PROVIDERS,
   PROVIDER_LABELS,
@@ -37,6 +37,8 @@ export function ProviderConfig() {
   const { secretStatus, refresh: refreshSecrets } = useSecretStatus()
   const { toast } = useToast()
   const locked = providerLocked(session?.workingFile)
+  const pinned = session?.workingFile ? lockedLlmProvider(session.workingFile) : null
+  const bySkill = pinned?.provider === CLAUDE_CODE_PROVIDER
   const [keyInput, setKeyInput] = useState('')
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
@@ -119,11 +121,20 @@ export function ProviderConfig() {
   return (
     <div className="space-y-4">
       {locked ? (
-        <LockNotice>
-          Provider &amp; model are locked — this file already has LLM scores, and every ticket in a run must use
-          the same model. <span className="font-bold text-ink">Open</span> its tickets.json to start a fresh
-          evaluation with a different model.
-        </LockNotice>
+        bySkill ? (
+          <LockNotice>
+            Provider &amp; model are locked. This file was scored outside the app by the{' '}
+            <span className="font-bold text-ink">evaluate-tickets</span> Claude Code skill ({pinned?.model}), so the
+            app can&apos;t continue its LLM run. Score the remaining tickets from the CLI, or{' '}
+            <span className="font-bold text-ink">Open</span> its tickets.json to start a fresh evaluation here.
+          </LockNotice>
+        ) : (
+          <LockNotice>
+            Provider &amp; model are locked. This file already has LLM scores, and every ticket in a run must use
+            the same model. <span className="font-bold text-ink">Open</span> its tickets.json to start a fresh
+            evaluation with a different model.
+          </LockNotice>
+        )
       ) : null}
       <fieldset disabled={locked} className={cn('m-0 space-y-4 border-0 p-0', locked && 'opacity-60')}>
       {/* Provider selector */}

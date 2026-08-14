@@ -291,10 +291,10 @@ export class Workspace {
     const file = normalizeEvalFile(await readJson(path))
     if (!file) throw new Error('That file is not a valid .qval.json eval file.')
     if (file.meta.dataset.fingerprint !== this.workingFile.meta.dataset.fingerprint) {
-      throw new Error('Different dataset — this eval file is not of the same tickets.')
+      throw new Error('Different dataset. This eval file is not of the same tickets.')
     }
     if (file.meta.config.fingerprint !== this.workingFile.meta.config.fingerprint) {
-      throw new Error('Different rules or schema — this eval file used different scoring criteria.')
+      throw new Error('Different rules or schema. This eval file used different scoring criteria.')
     }
     this.comparisons = [...this.comparisons, { id: path, name: basename(path), evaluators: file.evaluators }]
     return this.snapshot()

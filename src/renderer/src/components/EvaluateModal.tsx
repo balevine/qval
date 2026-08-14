@@ -10,7 +10,7 @@ import { useEvaluation } from '@/state/EvaluationContext'
 import { useToast } from '@/state/ToastContext'
 import { useSecretStatus } from '@/lib/useSecretStatus'
 import { formatCost, formatInt, errorMessage } from '@/lib/format'
-import { LLM_EVALUATOR_ID, needsAttention } from '@shared/evalFile'
+import { llmRunBlockReason, LLM_EVALUATOR_ID, needsAttention } from '@shared/evalFile'
 import { evaluationReadiness } from '@shared/readiness'
 import type { CostEstimate, RunMode } from '@shared/types'
 
@@ -33,6 +33,8 @@ export function EvaluateModal({ open, onOpenChange }: EvaluateModalProps) {
 
   const mode: RunMode = { kind: modeKind }
   const running = phase === 'running'
+  // A file the Claude Code skill scored can't be continued here (spec §18): no estimate, no run.
+  const blockReason = llmRunBlockReason(session?.workingFile)
 
   // Count how many tickets each mode targets (for the mode buttons).
   const counts = (() => {
@@ -50,7 +52,7 @@ export function EvaluateModal({ open, onOpenChange }: EvaluateModalProps) {
 
   // (Re)fetch the estimate when the modal opens or the mode changes (and no run is active).
   useEffect(() => {
-    if (!open || running) return
+    if (!open || running || blockReason) return
     let active = true
     setEstimating(true)
     setEstimate(null)
@@ -63,11 +65,11 @@ export function EvaluateModal({ open, onOpenChange }: EvaluateModalProps) {
       active = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, modeKind, running])
+  }, [open, modeKind, running, blockReason])
 
   const targetCount = counts[modeKind]
   const readiness = settings
-    ? evaluationReadiness(settings, !!secretStatus[settings.providerId])
+    ? evaluationReadiness(settings, !!secretStatus[settings.providerId], session?.workingFile)
     : { ready: false, message: 'Loading…' }
 
   return (
@@ -95,36 +97,38 @@ export function EvaluateModal({ open, onOpenChange }: EvaluateModalProps) {
             />
           </div>
 
-          {/* Estimate gate */}
-          <div className="border-2 border-ink">
-            <SectionHeader title="Estimate" />
-            <div className="p-3">
-              {estimating ? (
-                <div className="flex items-center gap-2 font-mono text-xs text-ink/60">
-                  <Loader2 className="h-4 w-4 animate-spin" /> Estimating…
-                </div>
-              ) : estimate ? (
-                <div className="grid grid-cols-2 gap-x-6 gap-y-2 font-mono text-xs">
-                  <Row label="Model" value={estimate.model || '—'} />
-                  <Row label="Tickets" value={formatInt(estimate.targetCount)} />
-                  <Row label="Batches" value={formatInt(estimate.batches)} />
-                  <Row label="Est. tokens" value={`~${formatInt(estimate.estimatedTotalTokens)}`} />
-                  <Row
-                    label="Est. cost"
-                    value={
-                      estimate.isLocal
-                        ? '$0 · local'
-                        : estimate.priceKnown && estimate.estimatedCostUsd !== null
-                          ? formatCost(estimate.estimatedCostUsd, { isLocal: false, approx: true })
-                          : '— (price unknown)'
-                    }
-                  />
-                </div>
-              ) : (
-                <div className="font-mono text-xs text-ink/50">No estimate.</div>
-              )}
+          {/* Estimate gate. Skipped for a blocked file, which `estimate` refuses too. */}
+          {blockReason ? null : (
+            <div className="border-2 border-ink">
+              <SectionHeader title="Estimate" />
+              <div className="p-3">
+                {estimating ? (
+                  <div className="flex items-center gap-2 font-mono text-xs text-ink/60">
+                    <Loader2 className="h-4 w-4 animate-spin" /> Estimating…
+                  </div>
+                ) : estimate ? (
+                  <div className="grid grid-cols-2 gap-x-6 gap-y-2 font-mono text-xs">
+                    <Row label="Model" value={estimate.model || '—'} />
+                    <Row label="Tickets" value={formatInt(estimate.targetCount)} />
+                    <Row label="Batches" value={formatInt(estimate.batches)} />
+                    <Row label="Est. tokens" value={`~${formatInt(estimate.estimatedTotalTokens)}`} />
+                    <Row
+                      label="Est. cost"
+                      value={
+                        estimate.isLocal
+                          ? '$0 · local'
+                          : estimate.priceKnown && estimate.estimatedCostUsd !== null
+                            ? formatCost(estimate.estimatedCostUsd, { isLocal: false, approx: true })
+                            : '— (price unknown)'
+                      }
+                    />
+                  </div>
+                ) : (
+                  <div className="font-mono text-xs text-ink/50">No estimate.</div>
+                )}
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Progress */}
           {running && progress ? (

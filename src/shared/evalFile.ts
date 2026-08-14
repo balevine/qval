@@ -8,6 +8,7 @@ import type {
   Evaluator,
   EvaluatorKind
 } from './types'
+import { ALL_PROVIDERS } from './types'
 import { normalizeSchema } from './schema'
 import { normalizeRules } from './rules'
 import { hasDrops } from './evalValidate'
@@ -159,6 +160,33 @@ export function providerLocked(file: EvalFile | null | undefined): boolean {
 export function lockedLlmProvider(file: EvalFile): { provider?: string; model?: string } | null {
   const llm = file.evaluators.find((e) => e.kind === 'llm' && e.results.some(isScoredResult))
   return llm ? { provider: llm.provider, model: llm.model } : null
+}
+
+// --- Externally-scored files (the Claude Code skill) -------------------------
+// The skill records `provider: 'claude-code'` and the ambient model that actually ran. The app has
+// no adapter for it, and continuing such a file in-app would put a second model's values inside the
+// one `llm` evaluator whose recorded model says otherwise. So the LLM run is blocked rather than
+// silently re-provided (spec §18). The human eval, merge, and comparison surfaces all still work.
+
+/** The `provider` the Claude Code skill stamps on the files it writes. */
+export const CLAUDE_CODE_PROVIDER = 'claude-code'
+
+/** A provider the app itself can't run: anything outside its own adapter list. */
+export function isExternalLlmProvider(provider: string | undefined): boolean {
+  return !!provider && !(ALL_PROVIDERS as string[]).includes(provider)
+}
+
+/**
+ * Why an in-app LLM run on this file is refused, or `null` when it's runnable. Only a file whose
+ * scored LLM evaluator is pinned to an external provider blocks. An unscored or app-produced one
+ * never does.
+ */
+export function llmRunBlockReason(file: EvalFile | null | undefined): string | null {
+  const pinned = file ? lockedLlmProvider(file) : null
+  if (!isExternalLlmProvider(pinned?.provider)) return null
+  return pinned?.provider === CLAUDE_CODE_PROVIDER
+    ? 'Scored by the Claude Code skill. Continue the LLM run from the CLI.'
+    : `Scored outside the app by "${pinned?.provider}". Continue the LLM run where it started.`
 }
 
 /** Quick structural guess (before full parse) — is this JSON a Qval eval file vs a tickets file? */

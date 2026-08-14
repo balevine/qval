@@ -1,4 +1,5 @@
-import type { Settings } from './types'
+import type { EvalFile, Settings } from './types'
+import { llmRunBlockReason } from './evalFile'
 
 export interface Readiness {
   ready: boolean
@@ -6,10 +7,17 @@ export interface Readiness {
 }
 
 /**
- * Whether the active provider is configured enough to run an evaluation, with a message pointing
- * the user at what's missing. Ollama needs a model; Anthropic needs a saved key + a chosen model.
+ * Whether an evaluation can run, with a message pointing the user at what's missing. A file scored
+ * outside the app (the Claude Code skill) blocks outright, whatever the provider config says.
+ * Otherwise Ollama needs a model, and Anthropic a saved key + a chosen model.
  */
-export function evaluationReadiness(settings: Settings, hasKey: boolean): Readiness {
+export function evaluationReadiness(
+  settings: Settings,
+  hasKey: boolean,
+  file?: EvalFile | null
+): Readiness {
+  const blocked = llmRunBlockReason(file)
+  if (blocked) return { ready: false, message: blocked }
   if (settings.providerId === 'ollama') {
     return settings.ollama.model.trim()
       ? { ready: true, message: '' }

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { EvaluationService, effectiveConfig, effectiveRunSettings, selectTargets } from './service'
-import { applyLlmResults, createWorkingFile, ownResults } from '@shared/evalFile'
+import { applyLlmResults, CLAUDE_CODE_PROVIDER, createWorkingFile, ownResults } from '@shared/evalFile'
 import { DEFAULT_RULES } from '@shared/rules'
 import { DEFAULT_SCHEMA } from '@shared/schema'
 import { DEFAULT_SETTINGS } from '@shared/settings'
@@ -173,5 +173,44 @@ describe('EvaluationService.start (integration)', () => {
     release()
     await inFlight
     expect(service.isRunning()).toBe(false)
+  })
+})
+
+describe('a file scored by the Claude Code skill (spec §18)', () => {
+  // Both entry points refuse, so the block holds even when the modal is bypassed over IPC.
+  const service = (file: EvalFile) => {
+    const settings: Settings = { ...DEFAULT_SETTINGS, providerId: 'ollama', ollama: { host: 'h', model: 'llama' } }
+    const workspace = {
+      currentWorkingFile: () => file,
+      currentTickets: () => tickets,
+      async ensureConfigStamped() {},
+      async commitWorkingFile() {}
+    }
+    return new EvaluationService(
+      { get: vi.fn().mockResolvedValue(settings) } as unknown as SettingsStore,
+      { getKey: vi.fn().mockResolvedValue(null) } as unknown as SecretStore,
+      workspace as unknown as Workspace,
+      async () => new FakeProvider()
+    )
+  }
+  const skillFile = applyLlmResults(base, {
+    provider: CLAUDE_CODE_PROVIDER,
+    model: 'Opus 5',
+    results: [res(1)]
+  })
+
+  it('estimate throws the block reason', async () => {
+    await expect(service(skillFile).estimate({ kind: 'all' })).rejects.toThrow(/Claude Code skill/)
+  })
+
+  it('start throws the block reason and never runs', async () => {
+    const s = service(skillFile)
+    await expect(s.start({ kind: 'all' }, () => {})).rejects.toThrow(/Claude Code skill/)
+    expect(s.isRunning()).toBe(false)
+  })
+
+  it('an app-produced file is not blocked', async () => {
+    const ollamaFile = applyLlmResults(base, { provider: 'ollama', model: 'llama', results: [res(1)] })
+    await expect(service(ollamaFile).estimate({ kind: 'all' })).resolves.toBeTruthy()
   })
 })

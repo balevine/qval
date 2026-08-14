@@ -8,7 +8,7 @@ Multiple people's eval files of the same dataset can be **merged** to produce pe
 
 **Highlights**
 
-- Two providers: **Ollama** (local, default) and **Anthropic**.
+- Two providers: **Ollama** (local, default) and **Anthropic**. Or [no API key at all](#evaluate-with-claude-code-no-api-key), via the bundled Claude Code skill.
 - API keys are stored in your **OS keychain** (via Electron `safeStorage`), never in plaintext and never exposed to the UI.
 - Typed schema (score / boolean / enum / text, each optionally multi-valued) and free-form rules, both snapshotted into every eval file.
 - LLM and human scores are pooled **separately** and compared per property; low agreement and large human-LLM gaps are flagged.
@@ -96,6 +96,24 @@ The results table has **Compare / LLM / Human** view modes Open any ticket for t
 
 - **EXPORT** writes your working `*.qval.json` (choose a location the first time). Hand it to a teammate and they can **MERGE** it into their own evaluation of the same dataset.
 - When files are merged, **Export report** (in the summary header) writes a flat aggregate JSON per ticket, the LLM and human aggregates and the comparison between them, plus the dataset-level roll-up for further analysis.
+
+---
+
+## Evaluate with Claude Code (no API key)
+
+If you use [Claude Code](https://docs.anthropic.com/en/docs/claude-code), the bundled **`evaluate-tickets`** skill runs the LLM evaluation with your Claude subscription instead of an API key. It's the same evaluation as step 4 above, done headlessly: a dependency-free Node engine owns the structure (schema validation, both fingerprints, batching, prompt compilation, per-value validation, atomic writes) and parallel subagents supply the judgment.
+
+```bash
+cd <directory with your tickets.json>
+# in Claude Code:
+/evaluate-tickets
+```
+
+The skill scaffolds `EVAL_RULES.md` and `EVAL_SCHEMA.json` on the first run, drafts them with you from a plain description of what you want measured, confirms which model to record, then plans, runs, and assembles the evaluation into a `*.qval.json` beside your tickets. Full docs: [`.claude/skills/evaluate-tickets/README.md`](.claude/skills/evaluate-tickets/README.md). Copy that folder to `~/.claude/skills/` to use it from any directory.
+
+**The app picks back up from there.** Open the resulting file and everything non-LLM works exactly as normal: browsing tickets, reading the model's scores, the human evaluation, merging teammates' files, comparison, and export. A CLI file and an app file of the same dataset and config merge with each other, because the fingerprints come from a port of the app's own code.
+
+The one thing the app won't do is **continue** a skill-produced LLM run. **EVALUATE** is disabled on those files and points you back to the CLI, because the file records the model that scored it and one model has to score every ticket in it. Run the skill again to score the rest.
 
 ---
 

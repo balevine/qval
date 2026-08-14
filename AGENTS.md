@@ -12,6 +12,7 @@ A local-first **Electron desktop app** for **evaluating** customer-support ticke
 - `src/preload/index.ts` — `contextBridge` exposing the typed `window.api`. Nothing else reaches the renderer.
 - `src/shared/` — cross-process pure logic + the **IPC contract**: `types.ts` (single source of truth for the data model + `IpcApi`/`IpcChannels`), `schema.ts`, `rules.ts`, `fingerprint.ts`, `promptCompiler.ts`, `validate.ts`, `aggregate.ts`, `evalFile.ts`.
 - `src/renderer/` — React UI: `App.tsx` shell, `components/` (`ui/` primitives + feature components), `state/` (contexts via `createSafeContext`), `lib/` (utils, format, hooks).
+- `.claude/skills/evaluate-tickets/` — a **Claude Code skill** that runs the LLM evaluation headlessly with the ambient model (no API key): `SKILL.md` (what Claude follows), `engine.mjs` (`init`/`config`/`plan`/`assemble`/`retry`/`status`), `lib/` (dependency-free ESM **ports** of the pure logic in `shared/`, so the folder is copyable to `~/.claude/skills/` and runs on bare `node`), `templates/`. The engine owns everything structural; subagents only supply judgment. **Any change to `shared/schema.ts`, `rules.ts`, `fingerprint.ts`, `promptCompiler.ts`, `evalValidate.ts`, or `evalFile.ts` must be mirrored in `lib/`**. `test/skillParity.test.ts` runs both over one case table, because silent fingerprint drift means CLI and app files quietly stop merging. Files it writes carry `provider: 'claude-code'` and are blocked from in-app LLM re-runs (spec §18).
 
 **Hard rule:** the renderer never touches Node, the network, or API keys. Everything crosses the boundary through the allow-listed IPC surface (declared in `shared/types.ts`, implemented in `main/ipc.ts`, bridged in `preload`). API keys are decrypted in main only and **never** returned to the renderer (renderer learns only "is a key set").
 
@@ -37,6 +38,7 @@ Batched, per-ticket output. `EvaluationService.start` → orchestrator splits ti
 - TypeScript strict; `noUnusedLocals` is on — no dead vars/imports. Path aliases `@shared/*` and `@/*`.
 - **camelCase** everywhere (data model + code). Property `key`s are camelCase and stable.
 - Every module in `shared/` and `main/` ships a colocated `*.test.ts` (**Vitest**). Tests are deterministic: no real network (providers mocked), `safeStorage` faked, and `rng`/`now`/`sleep` are injectable — keep them that way. Fingerprint and aggregate reducers are pure and exhaustively tested.
+- The skill's suites live in `test/` rather than beside it, since they cross the repo/skill boundary: `skillParity.test.ts` (port vs original) and `skillEngine.test.ts` (subcommands driven over `child_process` in a temp dir, with pre-written batch files standing in for subagents).
 - Prefer pure, testable helpers; keep side effects (fs, fetch, Electron) at the edges. Writes go through `fsUtil.atomicWriteJson`.
 - Comments explain **why**, not what; match the surrounding density.
 - When writing comments and markdown files, prefer periods and parenthesis over semi-colons and em-dashes.

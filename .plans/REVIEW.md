@@ -162,14 +162,41 @@ Baseline before: 130 tests. After these fixes: **134 tests**, typecheck clean.
   `Workspace.newEvaluation`). Lock notices (Schema/Rules/Provider) + README + PROJECT_SPEC (§3/§4/§10/§13/§16)
   reworded to point at re-opening the `tickets.json`. 134 tests green, typecheck clean.
 
+## Phase 10 — headless evaluation (2026-08-14)
+
+The Claude Code skill (`.claude/skills/evaluate-tickets/`, spec §18). Suite: **134 → 231 tests**, typecheck clean.
+
+- [x] **`effectiveRunSettings` was the hole.** It returns settings *unchanged* for a pinned provider it
+  doesn't recognise, so a file scored by the skill would have silently run under whatever the user's
+  current provider happened to be: a second model's values inside the one `llm` evaluator whose
+  recorded model says otherwise. Fixed by refusing the run outright rather than by teaching
+  `effectiveRunSettings` a third case: `llmRunBlockReason` (`shared/evalFile.ts`) keys off
+  `lockedLlmProvider`, so only a *scored* external evaluator blocks and an error-only skill file stays
+  runnable. Thrown from **both** `EvaluationService.estimate` and `.start`, not just the modal, so the
+  IPC surface can't be used to get around it.
+- [x] **Readiness carries the reason** (`evaluationReadiness(settings, hasKey, file?)`), so the modal
+  disables Run and explains itself through the existing not-ready hint instead of a second mechanism.
+  The estimate fetch is skipped for a blocked file, since `estimate` now refuses it (it would otherwise
+  open the modal with an error toast).
+- [x] **The lock notice tells the truth about *which* lock.** ProviderConfig branches on
+  `provider === CLAUDE_CODE_PROVIDER` and names the skill + the recorded model; every other locked file
+  keeps the original wording. A hypothetical third-party provider gets the generic notice, which is
+  still accurate advice.
+- [x] Docs synced: spec §14 phase 10, §16 decisions line, new §18, §17 checklist row; `AGENTS.md`
+  (skill in the structure list + the mirror-changes-in-`lib/` rule); `README.md` (an "Evaluate with
+  Claude Code" section and a highlights bullet); `.gitignore` (`.qval-run/`).
+
+**Not done here:** the manual pass (CLI eval → app → human eval → merge → export) is the user's, and
+the skill's own cold-start gate (Stage 5) is still open.
+
 ## Progress
 
 **Done (2026-07-05 → 07-08):** A1 (config authoritative + lock + New evaluation), A2 (descoped LLM-value editing),
 A3 (read-only repair badges), A4 (working file read-only during a run). Spec synced throughout.
 Suite now at **122 tests**, typecheck + build clean.
 
-**Remaining:**
-1. Phase 9: packaging (`.dmg`/`.zip` + release workflow) and a user-facing README. (Separate task.)
+**Remaining:** none of A1–A6. Phase 9 (packaging + user-facing README) shipped; phase 10 (the Claude
+Code skill) is above, pending its manual passes.
 
 **Deferred by the user** (not a concern for this app right now): §3 `setWindowOpenHandler` scheme allow-list,
 `unsafe-inline` style-CSP comment. The genuine hang risk (evaluation socket timeout) is done.
