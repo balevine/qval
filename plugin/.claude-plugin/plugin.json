@@ -1,0 +1,15 @@
+{
+  "name": "qval",
+  "displayName": "Qval",
+  "version": "0.2.0",
+  "description": "Evaluate customer-support tickets with Claude, then score them yourself and compare.",
+  "author": {
+    "name": "Brian Levine",
+    "email": "balevine@gmail.com",
+    "url": "https://github.com/balevine"
+  },
+  "homepage": "https://github.com/balevine/qval",
+  "repository": "https://github.com/balevine/qval",
+  "license": "MIT",
+  "keywords": ["evaluation", "tickets", "support", "llm-judge"]
+}

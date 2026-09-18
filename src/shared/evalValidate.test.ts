@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clampScore, validateValues, hasDrops } from './evalValidate'
+import { clampScore, validateValues, hasDrops } from '@lib/evalValidate.mjs'
 import type { EvalProperty, EvalSchema } from './types'
 
 const schema: EvalSchema = [

@@ -7,18 +7,16 @@ import {
   createWorkingFile,
   evaluatedCount,
   humanEvaluatedCount,
-  isExternalLlmProvider,
-  llmRunBlockReason,
   lockedLlmProvider,
   looksLikeEvalFile,
+  mergeResults,
   needsAttention,
   normalizeEvalFile,
-  ownResults,
-  providerLocked
-} from './evalFile'
+  ownResults
+} from '@lib/evalFile.mjs'
 import type { EvalResult } from './types'
-import { DEFAULT_SCHEMA } from './schema'
-import { DEFAULT_RULES } from './rules'
+import { DEFAULT_SCHEMA } from '@lib/schema.mjs'
+import { DEFAULT_RULES } from '@lib/rules.mjs'
 import type { EvalFile } from './types'
 
 const working = (): EvalFile =>
@@ -179,7 +177,7 @@ describe('needsAttention', () => {
   })
 })
 
-describe('config / provider lock (spec §3/§4)', () => {
+describe('config lock + model pin (spec §3/§4)', () => {
   const now = '2026-07-03T00:00:00.000Z'
   const llmResult = (ticketId: number, over: Partial<EvalResult> = {}): EvalResult => ({
     ticketId,
@@ -192,74 +190,56 @@ describe('config / provider lock (spec §3/§4)', () => {
   it('an empty working file is unlocked (schema still editable during setup)', () => {
     const f = working()
     expect(configLocked(f)).toBe(false)
-    expect(providerLocked(f)).toBe(false)
+    expect(lockedLlmProvider(f)).toBeNull()
     expect(configLocked(null)).toBe(false)
-    expect(providerLocked(undefined)).toBe(false)
+    expect(configLocked(undefined)).toBe(false)
   })
 
   it('an error-only / empty-values result does not lock', () => {
     const f = applyLlmResults(working(), {
-      provider: 'ollama',
-      model: 'llama',
+      provider: CLAUDE_CODE_PROVIDER,
+      model: 'Opus 5',
       results: [llmResult(1, { values: {}, error: 'boom' })]
     })
     expect(configLocked(f)).toBe(false)
-    expect(providerLocked(f)).toBe(false)
+    expect(lockedLlmProvider(f)).toBeNull() // an unscored run pins nothing, so a retry may switch models
   })
 
-  it('a scored human value locks the config but NOT the provider (LLM run still choosable)', () => {
+  it('a scored human value locks the config but pins no model', () => {
     const f = applyHumanValues(working(), { name: 'B', ticketId: 1, values: { resolved: true }, now })
     expect(configLocked(f)).toBe(true)
-    expect(providerLocked(f)).toBe(false)
     expect(lockedLlmProvider(f)).toBeNull()
   })
 
-  it('a scored LLM value locks both, and pins the producing provider/model', () => {
-    const f = applyLlmResults(working(), { provider: 'ollama', model: 'llama3.1', results: [llmResult(1)] })
+  it('a scored LLM value locks the config and pins the producing provider/model', () => {
+    const f = applyLlmResults(working(), { provider: CLAUDE_CODE_PROVIDER, model: 'Opus 5', results: [llmResult(1)] })
     expect(configLocked(f)).toBe(true)
-    expect(providerLocked(f)).toBe(true)
+    expect(lockedLlmProvider(f)).toEqual({ provider: CLAUDE_CODE_PROVIDER, model: 'Opus 5' })
+  })
+
+  it('pins whatever an older release recorded, so its files still read', () => {
+    const f = applyLlmResults(working(), { provider: 'ollama', model: 'llama3.1', results: [llmResult(1)] })
     expect(lockedLlmProvider(f)).toEqual({ provider: 'ollama', model: 'llama3.1' })
   })
 })
 
-describe('externally-scored files (spec §18)', () => {
-  const now = '2026-07-03T00:00:00.000Z'
-  const scored = (provider: string, model: string): EvalFile =>
-    applyLlmResults(working(), {
-      provider,
-      model,
-      results: [{ ticketId: 1, values: { empathy: 4 }, evaluatedAt: now, error: null }]
-    })
-
-  it('isExternalLlmProvider is true only for a provider the app has no adapter for', () => {
-    expect(isExternalLlmProvider('ollama')).toBe(false)
-    expect(isExternalLlmProvider('anthropic')).toBe(false)
-    expect(isExternalLlmProvider(CLAUDE_CODE_PROVIDER)).toBe(true)
-    expect(isExternalLlmProvider('openai')).toBe(true)
-    expect(isExternalLlmProvider(undefined)).toBe(false)
-    expect(isExternalLlmProvider('')).toBe(false)
+describe('mergeResults', () => {
+  it('fills a value dropped in the first attempt from the retry (cleaner wins)', () => {
+    const first: EvalResult = { ticketId: 1, values: { empathy: 4 }, evaluatedAt: 't', error: null, issues: [{ key: 'category', action: 'dropped' }] }
+    const retry: EvalResult = { ticketId: 1, values: { empathy: 2, category: 'bug' }, evaluatedAt: 't2', error: null }
+    const merged = mergeResults(first, retry)
+    expect(merged.values).toEqual({ empathy: 4, category: 'bug' }) // first wins where both present; retry fills the gap
+    expect(merged.issues).toBeUndefined()
   })
 
-  it('a skill-produced file blocks the in-app run, naming the CLI', () => {
-    expect(llmRunBlockReason(scored(CLAUDE_CODE_PROVIDER, 'Opus 5'))).toMatch(/Claude Code skill.*CLI/)
+  it('clears a ticket-level error when the retry produced values', () => {
+    const first: EvalResult = { ticketId: 1, values: {}, evaluatedAt: 't', error: 'omitted' }
+    const retry: EvalResult = { ticketId: 1, values: { empathy: 3 }, evaluatedAt: 't2', error: null }
+    expect(mergeResults(first, retry).error).toBeNull()
   })
 
-  it('another unknown provider blocks too, quoting what produced it', () => {
-    expect(llmRunBlockReason(scored('openai', 'gpt-x'))).toMatch(/"openai"/)
-  })
-
-  it('app-produced, unscored, and absent files never block', () => {
-    expect(llmRunBlockReason(scored('ollama', 'llama3.1'))).toBeNull()
-    expect(llmRunBlockReason(scored('anthropic', 'claude-x'))).toBeNull()
-    // Only a *scored* LLM evaluator pins a provider, so an error-only skill file stays runnable.
-    const errored = applyLlmResults(working(), {
-      provider: CLAUDE_CODE_PROVIDER,
-      model: 'Opus 5',
-      results: [{ ticketId: 1, values: {}, evaluatedAt: now, error: 'boom' }]
-    })
-    expect(llmRunBlockReason(errored)).toBeNull()
-    expect(llmRunBlockReason(working())).toBeNull()
-    expect(llmRunBlockReason(null)).toBeNull()
-    expect(llmRunBlockReason(undefined)).toBeNull()
+  it('returns the first attempt untouched when there was no retry', () => {
+    const first: EvalResult = { ticketId: 1, values: { empathy: 4 }, evaluatedAt: 't', error: null }
+    expect(mergeResults(first, undefined)).toBe(first)
   })
 })

@@ -1,5 +1,5 @@
 /**
- * End-to-end tests for the Claude Code skill's engine (`.claude/skills/evaluate-tickets/engine.mjs`).
+ * End-to-end tests for the Claude Code skill's engine (`plugin/skills/evaluate-tickets/engine.mjs`).
  *
  * Each test drives the real CLI with `child_process` in its own temp directory, with hand-written
  * batch files standing in for the subagents. That is the whole point: the engine's contract with
@@ -7,9 +7,10 @@
  * file that appears (or doesn't) at a path the engine printed. Nothing here touches the network or
  * spawns a real agent, so the suite is deterministic and offline like the rest of the repo's tests.
  *
- * The other half of the contract (that a file the engine writes is byte-compatible with the app)
- * is checked by running the app's *own* `normalizeEvalFile` and both fingerprint functions over the
- * produced `.qval.json`. `test/skillParity.test.ts` covers the pure ports unit by unit.
+ * The other half of the contract (that a file the engine writes is one the app can open and merge)
+ * is checked by running `normalizeEvalFile` and both fingerprint functions over the produced
+ * `.qval.json`. Those come from `plugin/lib/`, which is now the only copy of that logic, so this
+ * checks the wiring rather than two implementations agreeing.
  */
 
 import { describe, it, expect, afterAll } from 'vitest'
@@ -18,16 +19,16 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join, relative, resolve } from 'node:path'
 
-import { normalizeEvalFile } from '@shared/evalFile'
-import { configFingerprint, datasetFingerprint } from '@shared/fingerprint'
-import { normalizeSchema } from '@shared/schema'
-import { SYSTEM_PROMPT } from '@shared/promptCompiler'
-import { parseTicketsFile } from '@shared/validate'
+import { normalizeEvalFile } from '@lib/evalFile.mjs'
+import { configFingerprint, datasetFingerprint } from '@lib/fingerprint.mjs'
+import { normalizeSchema } from '@lib/schema.mjs'
+import { SYSTEM_PROMPT } from '@lib/promptCompiler.mjs'
+import { parseTicketsFile } from '@lib/tickets.mjs'
 import type { EvalFile, EvalResult, Ticket } from '@shared/types'
 
 // --- Fixtures ----------------------------------------------------------------
 
-const ENGINE = resolve(__dirname, '../.claude/skills/evaluate-tickets/engine.mjs')
+const ENGINE = resolve(__dirname, '../plugin/skills/evaluate-tickets/engine.mjs')
 const OUT_DIR = '.qval-run'
 const EVAL_FILE = 'tickets.qval.json'
 const MODEL = 'Opus 5'

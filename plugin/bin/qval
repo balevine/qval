@@ -1,0 +1,538 @@
+#!/usr/bin/env node
+// The Qval CLI. Two subcommands, both of them the plumbing behind a skill:
+//
+//   serve  [<file>] [--compare a.qval.json,b.qval.json] [--port N] [--no-open] [--out .qval-run]
+//          Resolve the dataset and the eval file, start the review server (spec §19) **detached**,
+//          open a browser at it, and return immediately with the URL. Scoring 200 tickets by hand
+//          takes an hour and no Bash timeout survives that, so `serve` must not block.
+//
+//   status [--eval-file <path>] [--out .qval-run]
+//          Report how the last review session ended and what is in the eval file. This is how the
+//          answer gets back to Claude, since the session outlived the command that started it.
+//
+// `serve --child` is the detached half re-entering this file. It is internal: the parent resolves
+// every path first (so a bad directory fails fast, with an exit code, rather than in a log file),
+// then hands the child explicit paths and waits for it to publish a session record.
+//
+// Exit codes match the engine's, so the skills can branch the same way: 0 ok, 1 a bad flag, 2
+// unusable state (fix the files or ask the user).
+//
+// Dependency-free ESM on bare node, like everything else under plugin/.
+
+import { spawn } from 'node:child_process'
+import { existsSync, openSync, promises as fs, readdirSync } from 'node:fs'
+import { userInfo } from 'node:os'
+import { basename, dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+import { parseArgs } from '../lib/args.mjs'
+import { atomicWriteJson, readJson } from '../lib/fsUtil.mjs'
+import { normalizeSchema } from '../lib/schema.mjs'
+import { normalizeRules } from '../lib/rules.mjs'
+import { isScoredResult, looksLikeEvalFile, normalizeEvalFile, ownResults } from '../lib/evalFile.mjs'
+import { parseTicketsFile } from '../lib/tickets.mjs'
+import { SettingsStore } from '../lib/settingsStore.mjs'
+import { suggestEvalName, Workspace } from '../lib/workspace.mjs'
+import { createReviewServer } from '../server/server.mjs'
+
+const EXIT = { OK: 0, USAGE: 1, INPUT: 2 }
+
+const DEFAULT_OUT_DIR = '.qval-run'
+const SESSION_FILE = 'review-session.json'
+/** The engine's config files. `serve` reads them in and writes them back, so both halves of Qval
+ *  score against the same schema and rules (spec §18/§19). */
+const RULES_FILE = 'EVAL_RULES.md'
+const SCHEMA_FILE = 'EVAL_SCHEMA.json'
+/** Cosmetic `meta.appVersion`, matching the engine's. */
+const APP_VERSION = '0.2.0'
+
+/** How long the parent waits for the child to publish a live session record. */
+const STARTUP_TIMEOUT_MS = 20_000
+/** Nobody ever opened the URL: give up rather than hold a port forever. */
+const NO_CLIENT_TIMEOUT_MS = 5 * 60_000
+
+const selfPath = fileURLToPath(import.meta.url)
+const nowIso = () => new Date().toISOString()
+
+function fail(line, ...rest) {
+  console.error(line)
+  for (const r of rest) console.error(r)
+  process.exit(EXIT.INPUT)
+}
+
+function usage(line, ...rest) {
+  console.error(line)
+  for (const r of rest) console.error(r)
+  process.exit(EXIT.USAGE)
+}
+
+/** A `--flag value` string, or null when the flag is absent, bare, or blank. */
+function flagValue(args, name) {
+  const v = args[name]
+  if (v === undefined || v === true) return null
+  const s = String(v).trim()
+  return s.length > 0 ? s : null
+}
+
+const outDirOf = (args) => resolve(flagValue(args, 'out') ?? DEFAULT_OUT_DIR)
+const sessionFileOf = (args) => join(outDirOf(args), SESSION_FILE)
+
+// ── file resolution ───────────────────────────────────────────────────────────
+
+/** `<stem>.qval.json` beside a tickets file. */
+const defaultEvalPath = (ticketsPath) => join(dirname(ticketsPath), suggestEvalName(ticketsPath))
+
+const isEvalName = (name) => name.endsWith('.qval.json')
+
+/** Every `*.qval.json` in `dir`, sorted, absolute. */
+function evalFilesIn(dir) {
+  try {
+    return readdirSync(dir)
+      .filter(isEvalName)
+      .sort()
+      .map((n) => join(dir, n))
+  } catch {
+    return []
+  }
+}
+
+/** Does this file parse as a tickets.json (Qbort's shape, or anything matching it)? */
+async function isTicketsFile(path) {
+  const raw = await readJson(path)
+  return raw != null && !looksLikeEvalFile(raw) && parseTicketsFile(raw) != null
+}
+
+/** Candidate tickets files in `dir`, `tickets.json` first because that is what Qbort writes. */
+async function ticketsFilesIn(dir) {
+  let names
+  try {
+    names = readdirSync(dir).filter((n) => n.endsWith('.json') && !isEvalName(n))
+  } catch {
+    return []
+  }
+  names.sort((a, b) => (a === 'tickets.json' ? -1 : b === 'tickets.json' ? 1 : a.localeCompare(b)))
+  const found = []
+  for (const n of names) {
+    if (await isTicketsFile(join(dir, n))) found.push(join(dir, n))
+  }
+  return found
+}
+
+/**
+ * The dataset an eval file was most likely built from: the one tickets file sitting next to it. An
+ * eval file references its dataset by fingerprint rather than by path, so it has to be relinked to
+ * real tickets before anything can be reviewed, and after `/qval:evaluate-tickets` the only thing
+ * that knows where they are is the directory. Returns null when the answer isn't unambiguous, in
+ * which case the relink falls back to `lastDatasetPath` and then fails with a readable message.
+ *
+ * A wrong guess cannot mislink: `Workspace.open` gates the file it is handed on the fingerprint.
+ */
+async function siblingTickets(dir) {
+  const found = await ticketsFilesIn(dir)
+  return found.length === 1 ? found[0] : null
+}
+
+/**
+ * Work out what to open, from an explicit argument or by looking around the directory. Returns
+ * `{ evalPath, ticketsPath }` — `evalPath` may not exist yet, in which case the child creates it.
+ *
+ * This runs in the parent on purpose: an ambiguous directory is the most likely failure, and it
+ * should come back as an exit code with a list, not as a line in a detached process's log.
+ */
+async function resolveTarget(target, dir) {
+  if (target) {
+    const path = resolve(target)
+    if (!existsSync(path)) fail(`MISSING_FILE ${path}`)
+    if (isEvalName(path)) return { evalPath: path, ticketsPath: await siblingTickets(dirname(path)) }
+    if (!(await isTicketsFile(path))) {
+      fail(
+        `BAD_TICKETS ${path}`,
+        '  Not a tickets.json (Qbort\'s shape) and not a *.qval.json eval file.'
+      )
+    }
+    return { evalPath: defaultEvalPath(path), ticketsPath: path }
+  }
+
+  const evals = evalFilesIn(dir)
+  if (evals.length === 1) return { evalPath: evals[0], ticketsPath: await siblingTickets(dir) }
+  if (evals.length > 1) {
+    fail(
+      `AMBIGUOUS ${evals.length} eval files in ${dir}`,
+      ...evals.map((p) => `  ${basename(p)}`),
+      '  Pass the one to review: `qval serve <file>.qval.json`.'
+    )
+  }
+
+  const tickets = await ticketsFilesIn(dir)
+  if (tickets.length === 0) {
+    fail(
+      `NO_DATASET ${dir}`,
+      '  Nothing here looks like a tickets.json or a *.qval.json eval file.'
+    )
+  }
+  if (tickets.length > 1) {
+    fail(
+      `AMBIGUOUS ${tickets.length} ticket files in ${dir}`,
+      ...tickets.map((p) => `  ${basename(p)}`),
+      '  Pass the one to review: `qval serve <file>.json`.'
+    )
+  }
+  return { evalPath: defaultEvalPath(tickets[0]), ticketsPath: tickets[0] }
+}
+
+/**
+ * The files on offer to MERGE: every other `*.qval.json` next to the working file, plus anything
+ * named with `--compare`. The browser is shown the ids and names only (spec §19).
+ */
+function resolveCandidates(args, dir, evalPath) {
+  const explicit = (flagValue(args, 'compare') ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((p) => resolve(p))
+  const paths = []
+  for (const p of [...evalFilesIn(dir), ...explicit]) {
+    if (p !== evalPath && !paths.includes(p)) paths.push(p)
+  }
+  return paths.map((path, i) => ({ id: `c${i + 1}`, name: basename(path), path }))
+}
+
+// ── the engine's config files, shared both ways ───────────────────────────────
+
+/**
+ * Seed the working schema and rules from `EVAL_SCHEMA.json` / `EVAL_RULES.md` when they exist, so a
+ * review opened on a bare tickets.json starts from the same config `/qval:evaluate-tickets` would
+ * use. Without this the two halves of Qval quietly disagree and the eval files stop merging.
+ * Skipped for an eval file, which carries its own authoritative config snapshot (spec §3).
+ */
+async function seedConfigFromEngineFiles(settings, dir) {
+  const patch = {}
+  const rawSchema = await readJson(join(dir, SCHEMA_FILE))
+  if (Array.isArray(rawSchema)) {
+    const schema = normalizeSchema(rawSchema)
+    if (schema.length) patch.schema = schema
+  }
+  try {
+    patch.rules = normalizeRules(await fs.readFile(join(dir, RULES_FILE), 'utf8'))
+  } catch {
+    /* no rules file: keep what settings already hold */
+  }
+  if (Object.keys(patch).length) await settings.set(patch)
+}
+
+/**
+ * The other direction, once the session is over: write the config the person actually used back out
+ * for the engine to read. Cheap to do and it is what keeps a browser-side setup runnable headlessly.
+ */
+async function writeConfigForEngine(settings, dir) {
+  const s = await settings.get()
+  if (!s.schema.length) return
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(join(dir, SCHEMA_FILE), `${JSON.stringify(s.schema, null, 2)}\n`, 'utf8')
+  await fs.writeFile(join(dir, RULES_FILE), s.rules.endsWith('\n') ? s.rules : `${s.rules}\n`, 'utf8')
+}
+
+// ── the session record ────────────────────────────────────────────────────────
+
+/**
+ * Write the record `status` reads back. Chmod'd to the owner because a live record holds the URL,
+ * and the URL holds the session token.
+ */
+async function writeRecord(path, record) {
+  await atomicWriteJson(path, record)
+  try {
+    await fs.chmod(path, 0o600)
+  } catch {
+    /* best effort — a filesystem without modes is not a reason to fail the run */
+  }
+}
+
+/** Is that pid still around? Used to tell a live session from one that died without saying so. */
+function pidAlive(pid) {
+  if (typeof pid !== 'number') return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return err?.code === 'EPERM'
+  }
+}
+
+// ── serve (parent) ────────────────────────────────────────────────────────────
+
+async function cmdServe(args) {
+  if (args.child) return cmdServeChild(args)
+
+  const dir = process.cwd()
+  const outDir = outDirOf(args)
+  const recordPath = sessionFileOf(args)
+
+  // A session already running here is the common re-ask ("open it again"), not an error.
+  const existing = await readJson(recordPath)
+  if (existing?.status === 'live' && pidAlive(existing.pid)) {
+    console.log('ALREADY_SERVING')
+    console.log(`URL ${existing.url}`)
+    console.log(`WORKING_FILE ${existing.workingPath}`)
+    return
+  }
+
+  const { evalPath, ticketsPath } = await resolveTarget(args._[0], dir)
+  const candidates = resolveCandidates(args, dir, evalPath)
+
+  const port = flagValue(args, 'port')
+  if (port !== null && !/^\d+$/.test(port)) usage(`BAD_PORT ${port}`, '  --port takes a number.')
+
+  await fs.mkdir(outDir, { recursive: true })
+  const sessionId = `${process.pid}-${Date.now()}`
+  const logPath = join(outDir, 'review.log')
+  const log = openSync(logPath, 'a')
+
+  const childArgs = [
+    selfPath,
+    'serve',
+    '--child',
+    '--session',
+    sessionId,
+    '--out',
+    outDir,
+    '--eval-file',
+    evalPath,
+    '--dir',
+    dir
+  ]
+  if (ticketsPath) childArgs.push('--tickets', ticketsPath)
+  if (candidates.length) childArgs.push('--compare', candidates.map((c) => c.path).join(','))
+  if (port !== null) childArgs.push('--port', port)
+  if (args['no-open']) childArgs.push('--no-open')
+
+  const child = spawn(process.execPath, childArgs, {
+    cwd: dir,
+    detached: true,
+    stdio: ['ignore', log, log]
+  })
+  child.unref()
+
+  // Wait for the child to publish. This is the only synchronization point: after it, the parent is
+  // done and the session outlives it.
+  const deadline = Date.now() + STARTUP_TIMEOUT_MS
+  for (;;) {
+    const record = await readJson(recordPath)
+    if (record?.sessionId === sessionId) {
+      if (record.status === 'error') {
+        fail(`SERVER_FAILED ${record.error ?? 'unknown error'}`, `  See ${logPath}.`)
+      }
+      if (record.status === 'live') {
+        console.log('SERVING')
+        console.log(`URL ${record.url}`)
+        console.log(`WORKING_FILE ${record.workingPath}`)
+        if (record.datasetPath) console.log(`DATASET ${record.datasetPath}`)
+        console.log(`CANDIDATES ${record.candidates.length}`)
+        console.log(`OPENED ${record.opened ? 'yes' : 'no'}`)
+        return
+      }
+    }
+    if (Date.now() > deadline) fail('SERVER_TIMEOUT the review server did not start.', `  See ${logPath}.`)
+    await new Promise((r) => setTimeout(r, 100))
+  }
+}
+
+// ── serve (detached child) ────────────────────────────────────────────────────
+
+/**
+ * Hand the URL to a browser. Two ways this goes wrong and both are silent, which is why the URL is
+ * printed either way:
+ *
+ * `$BROWSER` is a documented override, and Claude Code's agent view sets it to the literal `true`.
+ * Shelling out naively there runs `true <url>`, which exits 0 without opening anything and leaves
+ * the session waiting for a tab that will never arrive. So the sentinel values are treated as "no
+ * browser here", not as a command.
+ */
+function browserCommand(url) {
+  const raw = process.env.BROWSER
+  if (raw !== undefined) {
+    const cmd = raw.trim()
+    const sentinels = new Set(['', 'true', 'false', 'none', 'echo', ':', 'cat', '0', '1'])
+    if (sentinels.has(cmd.toLowerCase())) return null
+    return { cmd, args: [url] }
+  }
+  if (process.platform === 'darwin') return { cmd: 'open', args: [url] }
+  if (process.platform === 'win32') return { cmd: 'cmd', args: ['/c', 'start', '', url] }
+  return { cmd: 'xdg-open', args: [url] }
+}
+
+/** @returns {boolean} whether we managed to hand the URL to anything. */
+function openBrowser(url) {
+  const opener = browserCommand(url)
+  if (!opener) return false
+  try {
+    const child = spawn(opener.cmd, opener.args, { detached: true, stdio: 'ignore' })
+    child.on('error', () => {
+      /* no such opener: the printed URL is the fallback */
+    })
+    child.unref()
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function cmdServeChild(args) {
+  const sessionId = flagValue(args, 'session')
+  const outDir = outDirOf(args)
+  const recordPath = join(outDir, SESSION_FILE)
+  const dir = flagValue(args, 'dir') ?? process.cwd()
+  const evalPath = flagValue(args, 'eval-file')
+  const ticketsPath = flagValue(args, 'tickets')
+  const comparePaths = (flagValue(args, 'compare') ?? '').split(',').filter(Boolean)
+
+  const base = {
+    app: 'qval-review',
+    sessionId,
+    pid: process.pid,
+    startedAt: nowIso(),
+    endedAt: null,
+    workingPath: evalPath,
+    datasetPath: ticketsPath,
+    candidates: comparePaths.map((p) => basename(p))
+  }
+
+  const settings = new SettingsStore(outDir)
+  const workspace = new Workspace(settings, APP_VERSION)
+  let server = null
+
+  try {
+    // The name stamped on the human evaluator. The OS username is a better first guess than a
+    // placeholder, and it stays editable in the browser.
+    const current = await settings.get()
+    if (!current.evaluatorName) {
+      let username = 'Me'
+      try {
+        username = userInfo().username || 'Me'
+      } catch {
+        /* userInfo throws in some sandboxes */
+      }
+      await settings.set({ evaluatorName: username })
+    }
+
+    if (existsSync(evalPath)) {
+      // Resuming: the file's own config snapshot wins, and its dataset is relinked by fingerprint.
+      await workspace.open(evalPath, async () => ticketsPath)
+    } else {
+      if (!ticketsPath) throw new Error(`${evalPath} does not exist and no tickets file was given.`)
+      await seedConfigFromEngineFiles(settings, dir)
+      await workspace.open(ticketsPath)
+      await workspace.save(evalPath)
+    }
+    workspace.setComparisonSources(
+      comparePaths.map((path, i) => ({ id: `c${i + 1}`, name: basename(path), path }))
+    )
+
+    server = createReviewServer({ workspace, settings, appVersion: APP_VERSION })
+    const url = await server.listen(Number(flagValue(args, 'port') ?? 0))
+    const opened = args['no-open'] ? false : openBrowser(url)
+
+    await writeRecord(recordPath, { ...base, status: 'live', url, port: server.port, opened, error: null })
+
+    // Nobody ever took the lease: the browser never opened and never will. Ending here beats
+    // holding a port and a token open indefinitely.
+    const abandonedByNobody = new Promise((r) => {
+      const t = setTimeout(() => {
+        if (!server.everConnected) r({ reason: 'abandoned', workingPath: workspace.currentPath() })
+      }, NO_CLIENT_TIMEOUT_MS)
+      t.unref?.()
+    })
+
+    const outcome = await Promise.race([server.finished, abandonedByNobody])
+    await server.close()
+    // The person may have rewritten the schema or the rules in the browser; hand that back to the
+    // engine so a follow-up `/qval:evaluate-tickets` scores against what they actually used.
+    await writeConfigForEngine(settings, dir)
+    await writeRecord(recordPath, {
+      ...base,
+      status: outcome.reason,
+      endedAt: nowIso(),
+      // The URL carries the token, and the token dies with the session.
+      url: null,
+      port: null,
+      opened: null,
+      workingPath: outcome.workingPath ?? evalPath,
+      error: null
+    })
+  } catch (err) {
+    await server?.close()
+    await writeRecord(recordPath, {
+      ...base,
+      status: 'error',
+      endedAt: nowIso(),
+      url: null,
+      port: null,
+      opened: null,
+      error: err instanceof Error ? err.message : String(err)
+    })
+    process.exit(EXIT.INPUT)
+  }
+}
+
+// ── status ───────────────────────────────────────────────────────────────────
+
+async function cmdStatus(args) {
+  const recordPath = sessionFileOf(args)
+  const record = await readJson(recordPath)
+
+  if (!record) {
+    console.log('REVIEW none')
+  } else if (record.status === 'live' && !pidAlive(record.pid)) {
+    // The process died without recording an outcome (killed, machine restarted). Say so rather
+    // than reporting a session that is not there.
+    console.log('REVIEW stale')
+    console.log(`STARTED ${record.startedAt}`)
+  } else {
+    console.log(`REVIEW ${record.status}`)
+    if (record.status === 'live') {
+      console.log(`URL ${record.url}`)
+      if (!record.opened) console.log('OPENED no')
+    }
+    if (record.endedAt) console.log(`ENDED ${record.endedAt}`)
+    if (record.error) console.log(`ERROR ${record.error}`)
+  }
+
+  const evalPath = flagValue(args, 'eval-file') ?? record?.workingPath ?? null
+  if (!evalPath) return
+  const file = normalizeEvalFile(await readJson(evalPath))
+  if (!file) {
+    console.log(`NO_EVAL_FILE ${evalPath}`)
+    return
+  }
+
+  const total = file.meta.dataset.ticketCount
+  const llmResults = ownResults(file, 'llm')
+  const humanResults = ownResults(file, 'human')
+  const llm = file.evaluators.find((e) => e.kind === 'llm')
+  const errors = llmResults.filter((r) => r.error).length
+  const drops = llmResults.reduce((n, r) => n + (r.issues ?? []).filter((i) => i.action === 'dropped').length, 0)
+
+  console.log(`FILE ${evalPath}`)
+  console.log(
+    `LLM ${llm?.model ?? '(none)'} · scored ${llmResults.filter(isScoredResult).length}/${total} · errors ${errors} · dropped-values ${drops}`
+  )
+  console.log(`HUMAN scored ${humanResults.filter(isScoredResult).length}/${total}`)
+  console.log(`UPDATED ${file.meta.updatedAt}`)
+}
+
+// ── dispatch ─────────────────────────────────────────────────────────────────
+
+const argv = process.argv.slice(2)
+const cmd = argv[0]
+const args = parseArgs(argv.slice(1))
+
+switch (cmd) {
+  case 'serve':
+    await cmdServe(args)
+    break
+  case 'status':
+    await cmdStatus(args)
+    break
+  default:
+    console.error('Usage: qval <serve|status> [options]  (see the file header)')
+    process.exit(EXIT.USAGE)
+}

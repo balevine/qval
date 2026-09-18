@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import type { EvalFile, SessionSnapshot } from '@shared/types'
 import { createSafeContext } from '@/lib/createSafeContext'
+import { api } from '@/lib/apiClient'
 
 interface SessionContextValue {
   session: SessionSnapshot | null
   loading: boolean
-  /** Replace the whole session (after OPEN) or clear it. */
+  /** Replace the whole session (after a merge) or clear it. */
   setSession: (session: SessionSnapshot | null) => void
   /** Update just the working-file path (after a save). */
   setWorkingPath: (path: string | null) => void
@@ -23,7 +24,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // Try to silently reload the last working file + its dataset on launch.
   useEffect(() => {
     let active = true
-    window.api.session
+    api.session
       .loadLast()
       .then((s) => {
         if (active && s) setSession(s)

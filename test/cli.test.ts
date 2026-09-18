@@ -1,0 +1,316 @@
+/**
+ * Tests for `plugin/bin/qval`, the CLI behind `/qval:review`.
+ *
+ * Everything here drives the real binary over `child_process` in a temp directory, the way
+ * `skillEngine.test.ts` drives the engine. What matters is the contract the skill branches on: the
+ * first stdout token, the exit code, and the session record a detached server leaves behind.
+ *
+ * The server outlives the command that started it, so every case tears its child down by pid.
+ */
+
+import { spawnSync } from 'node:child_process'
+import { promises as fs, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+
+import { readJson } from '@lib/fsUtil.mjs'
+import type { Ticket } from '@shared/types'
+
+const CLI = resolve(__dirname, '../plugin/bin/qval')
+
+const TICKETS: Ticket[] = [1, 2].map((id) => ({
+  id,
+  subject: `Ticket ${id}`,
+  status: 'open',
+  messages: [{ from: { name: 'A', email: 'a@x.com' }, body: `body ${id}`, isStaff: false, createdAt: 'now' }]
+}))
+
+/** The shape `qval status` reads back. */
+interface SessionRecord {
+  status: 'live' | 'done' | 'abandoned' | 'error'
+  pid: number
+  url: string | null
+  port: number | null
+  opened: boolean | null
+  workingPath: string
+  candidates: string[]
+  error: string | null
+}
+
+let dir: string
+/** Every directory a server was started in, so afterEach can find and kill its child. */
+let homes: string[] = []
+
+beforeEach(async () => {
+  // Realpath, because the CLI reports paths as `process.cwd()` resolves them and macOS's /tmp is a
+  // symlink into /private/tmp.
+  dir = await fs.realpath(await fs.mkdtemp(join(tmpdir(), 'qv-cli-')))
+  homes = []
+})
+
+afterEach(async () => {
+  for (const home of homes) {
+    const record = await readJson<SessionRecord>(join(home, '.qval-run', 'review-session.json'))
+    if (record?.status === 'live') {
+      try {
+        process.kill(record.pid)
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+  await fs.rm(dir, { recursive: true, force: true })
+})
+
+/** A working directory holding a tickets.json, plus whatever else the case needs. */
+async function home(name: string, files: Record<string, unknown> = {}) {
+  const path = join(dir, name)
+  await fs.mkdir(path, { recursive: true })
+  writeFileSync(join(path, 'tickets.json'), JSON.stringify(TICKETS, null, 2))
+  for (const [file, value] of Object.entries(files)) {
+    writeFileSync(join(path, file), typeof value === 'string' ? value : JSON.stringify(value, null, 2))
+  }
+  return path
+}
+
+function qval(cwd: string, args: string[], env: Record<string, string> = {}) {
+  homes.push(cwd)
+  const res = spawnSync(process.execPath, [CLI, ...args], {
+    cwd,
+    encoding: 'utf8',
+    env: { ...process.env, ...env }
+  })
+  if (res.error) throw res.error
+  return { status: res.status, out: res.stdout, err: res.stderr }
+}
+
+/** The value of a `KEY value` line in the CLI's output. */
+const field = (out: string, key: string) =>
+  out
+    .split('\n')
+    .find((l) => l.startsWith(`${key} `))
+    ?.slice(key.length + 1) ?? null
+
+const readRecord = (cwd: string) => readJson<SessionRecord>(join(cwd, '.qval-run', 'review-session.json'))
+
+/** POST as the served page would: token in the header, plus the header the server requires. */
+async function post(url: string, path: string, body: unknown = {}) {
+  const parsed = new URL(url)
+  return fetch(`${parsed.origin}${path}`, {
+    method: 'POST',
+    headers: {
+      'X-Qval-Token': parsed.searchParams.get('t') ?? '',
+      'Content-Type': 'application/json',
+      'Sec-Fetch-Site': 'same-origin'
+    },
+    body: JSON.stringify(body)
+  })
+}
+
+// --- Resolving what to open --------------------------------------------------
+
+describe('serve: what it opens', () => {
+  it('finds the only tickets.json, creates the eval file beside it, and serves detached', async () => {
+    const cwd = await home('one')
+    const res = qval(cwd, ['serve', '--no-open'])
+
+    expect(res.status).toBe(0)
+    expect(res.out.split('\n')[0]).toBe('SERVING')
+    expect(field(res.out, 'WORKING_FILE')).toBe(join(cwd, 'tickets.qval.json'))
+    expect(field(res.out, 'DATASET')).toBe(join(cwd, 'tickets.json'))
+    expect(field(res.out, 'CANDIDATES')).toBe('0')
+    expect(field(res.out, 'OPENED')).toBe('no')
+
+    // The command returned but the session did not: that is the point of the detached child.
+    const record = (await readRecord(cwd))!
+    expect(record.status).toBe('live')
+    expect(record.pid).not.toBe(process.pid)
+    expect((await readJson(join(cwd, 'tickets.qval.json')))).not.toBeNull()
+
+    const res2 = await fetch(field(res.out, 'URL')!)
+    expect(res2.status).toBe(200)
+  })
+
+  it('resumes an existing eval file rather than starting a new one over it', async () => {
+    const cwd = await home('resume')
+    qval(cwd, ['serve', '--no-open'])
+    const first = (await readRecord(cwd))!
+    await post(first.url!, '/api/done')
+
+    // Second run, no argument: the *.qval.json now in the directory is the thing to open.
+    const res = qval(cwd, ['serve', '--no-open'])
+    expect(field(res.out, 'WORKING_FILE')).toBe(join(cwd, 'tickets.qval.json'))
+    // Resumed from the eval file, whose dataset is the tickets.json sitting next to it.
+    expect(field(res.out, 'DATASET')).toBe(join(cwd, 'tickets.json'))
+  })
+
+  it('relinks the sibling tickets.json for an eval file it has never served before', async () => {
+    // What `/qval:evaluate-tickets` leaves behind: an eval file next to its dataset, and no settings
+    // remembering where that dataset is. An eval file references its tickets by fingerprint, so the
+    // pair has to be relinked from the directory or there is nothing to review.
+    const source = await home('produced')
+    qval(source, ['serve', '--no-open'])
+    await post((await readRecord(source))!.url!, '/api/done')
+
+    const cwd = await home('elsewhere')
+    writeFileSync(join(cwd, 'tickets.qval.json'), readFileSync(join(source, 'tickets.qval.json')))
+    const res = qval(cwd, ['serve', '--no-open'])
+
+    expect(res.out.split('\n')[0]).toBe('SERVING')
+    expect(field(res.out, 'DATASET')).toBe(join(cwd, 'tickets.json'))
+    // The child got far enough to publish a live record, which it only does once the relink worked.
+    expect((await readRecord(cwd))!.status).toBe('live')
+  })
+
+  it('offers the other eval files in the directory as merge candidates', async () => {
+    const cwd = await home('candidates', { 'alice.qval.json': { not: 'validated yet' } })
+    qval(cwd, ['serve', 'tickets.json', '--no-open'])
+
+    const record = (await readRecord(cwd))!
+    expect(record.candidates).toEqual(['alice.qval.json'])
+  })
+
+  it('refuses an ambiguous directory with the list, instead of guessing', async () => {
+    const cwd = await home('ambiguous', { 'a.qval.json': {}, 'b.qval.json': {} })
+    const res = qval(cwd, ['serve', '--no-open'])
+
+    expect(res.status).toBe(2)
+    expect(res.err).toMatch(/^AMBIGUOUS 2 eval files/)
+    expect(res.err).toContain('a.qval.json')
+    expect(res.err).toContain('b.qval.json')
+  })
+
+  it('refuses a directory with nothing to review', async () => {
+    const cwd = join(dir, 'empty')
+    await fs.mkdir(cwd, { recursive: true })
+    expect(qval(cwd, ['serve', '--no-open']).err).toMatch(/^NO_DATASET/)
+  })
+
+  it('refuses a file that is neither tickets nor an eval file', async () => {
+    const cwd = await home('bad', { 'notes.json': { hello: 'world' } })
+    const res = qval(cwd, ['serve', 'notes.json', '--no-open'])
+    expect(res.status).toBe(2)
+    expect(res.err).toMatch(/^BAD_TICKETS/)
+  })
+
+  it('does not start a second server over a live one', async () => {
+    const cwd = await home('twice')
+    const first = qval(cwd, ['serve', '--no-open'])
+    const second = qval(cwd, ['serve', '--no-open'])
+
+    expect(second.status).toBe(0)
+    expect(second.out.split('\n')[0]).toBe('ALREADY_SERVING')
+    expect(field(second.out, 'URL')).toBe(field(first.out, 'URL'))
+  })
+})
+
+// --- Opening a browser -------------------------------------------------------
+
+describe('serve: handing over the URL', () => {
+  it('treats $BROWSER=true as no browser at all, and still prints the URL', async () => {
+    // Claude Code's agent view sets this. Shelling out naively runs `true <url>`, which exits 0
+    // without opening anything and leaves the session waiting for a tab that never arrives.
+    const cwd = await home('sentinel')
+    const res = qval(cwd, ['serve'], { BROWSER: 'true' })
+
+    expect(field(res.out, 'OPENED')).toBe('no')
+    expect(field(res.out, 'URL')).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/\?t=[0-9a-f]{64}$/)
+  })
+})
+
+// --- status ------------------------------------------------------------------
+
+describe('status', () => {
+  it('says none where nothing has run', async () => {
+    const cwd = await home('nostatus')
+    const res = qval(cwd, ['status'])
+    expect(res.status).toBe(0)
+    expect(res.out.trim()).toBe('REVIEW none')
+  })
+
+  it('reports a live session, then the outcome once the user finishes', async () => {
+    const cwd = await home('lifecycle')
+    const serve = qval(cwd, ['serve', '--no-open'])
+    const url = field(serve.out, 'URL')!
+
+    const live = qval(cwd, ['status'])
+    expect(live.out.split('\n')[0]).toBe('REVIEW live')
+    expect(field(live.out, 'URL')).toBe(url)
+    expect(live.out).toMatch(/HUMAN scored 0\/2/)
+
+    // Score one ticket by hand, then finish, exactly as the browser does.
+    await post(url, '/api/config', { schema: [{ key: 'empathy', label: 'Empathy', type: 'score', min: 1, max: 5, step: 1 }] })
+    await post(url, '/api/result', { ticketId: 1, values: { empathy: 4 } })
+    await post(url, '/api/done')
+
+    // The child has to notice, close, and rewrite the record.
+    for (let i = 0; i < 50 && (await readRecord(cwd))?.status === 'live'; i++) {
+      await new Promise((r) => setTimeout(r, 50))
+    }
+
+    const done = qval(cwd, ['status'])
+    expect(done.out.split('\n')[0]).toBe('REVIEW done')
+    expect(done.out).toMatch(/HUMAN scored 1\/2/)
+    expect(field(done.out, 'FILE')).toBe(join(cwd, 'tickets.qval.json'))
+    // The URL carried the session token, and the session is over.
+    expect((await readRecord(cwd))!.url).toBeNull()
+  })
+
+  it('reports a session whose process died as stale rather than live', async () => {
+    const cwd = await home('stale')
+    qval(cwd, ['serve', '--no-open'])
+    const record = (await readRecord(cwd))!
+    process.kill(record.pid)
+    // Wait for the pid to actually go away before asking.
+    for (let i = 0; i < 50; i++) {
+      try {
+        process.kill(record.pid, 0)
+      } catch {
+        break
+      }
+      await new Promise((r) => setTimeout(r, 20))
+    }
+
+    expect(qval(cwd, ['status']).out.split('\n')[0]).toBe('REVIEW stale')
+  })
+})
+
+// --- The config the two halves share -----------------------------------------
+
+describe('shared config with the engine', () => {
+  it('seeds the session from EVAL_SCHEMA.json and writes back what was used', async () => {
+    const schema = [{ key: 'tone', label: 'Tone', type: 'enum', options: ['warm', 'curt'] }]
+    const cwd = await home('config', { 'EVAL_SCHEMA.json': schema, 'EVAL_RULES.md': 'Judge the tone.\n' })
+
+    const serve = qval(cwd, ['serve', '--no-open'])
+    const url = field(serve.out, 'URL')!
+
+    // The browser opens onto the engine's config, not the default schema.
+    const session = (await (
+      await fetch(`${new URL(url).origin}/api/session`, { headers: { 'X-Qval-Token': new URL(url).searchParams.get('t')! } })
+    ).json()) as { settings: { schema: { key: string }[]; rules: string } }
+    expect(session.settings.schema.map((p) => p.key)).toEqual(['tone'])
+    expect(session.settings.rules).toBe('Judge the tone.\n')
+
+    // Change it in the browser, finish, and the engine's files hold what the person actually used.
+    await post(url, '/api/config', { rules: 'Judge the tone, generously.\n' })
+    await post(url, '/api/done')
+    for (let i = 0; i < 50 && (await readRecord(cwd))?.status === 'live'; i++) {
+      await new Promise((r) => setTimeout(r, 50))
+    }
+
+    expect(await fs.readFile(join(cwd, 'EVAL_RULES.md'), 'utf8')).toBe('Judge the tone, generously.\n')
+    expect(await readJson(join(cwd, 'EVAL_SCHEMA.json'))).toMatchObject([{ key: 'tone' }])
+  })
+})
+
+// --- Usage -------------------------------------------------------------------
+
+describe('refusals', () => {
+  it('exits 1 on an unknown subcommand and on a malformed flag', async () => {
+    const cwd = await home('usage')
+    expect(qval(cwd, ['frobnicate']).status).toBe(1)
+    expect(qval(cwd, ['serve', '--port', 'eighty', '--no-open']).status).toBe(1)
+  })
+})

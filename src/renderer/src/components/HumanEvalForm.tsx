@@ -3,7 +3,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { formatEvalValue } from '@/lib/format'
-import { clampScore } from '@shared/evalValidate'
+import { clampScore } from '@lib/evalValidate.mjs'
 import type { EvalIssue, EvalProperty, EvalSchema, EvalValue, EvalValues } from '@shared/types'
 
 interface HumanEvalFormProps {

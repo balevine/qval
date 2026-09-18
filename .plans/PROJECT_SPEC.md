@@ -1,15 +1,17 @@
 # Qval — Project Spec
 
-A local-first Electron desktop app for **evaluating** customer-support tickets with an LLM and with humans, then **aggregating** many evaluators' scores. Qval is the companion to **Qbort**: Qbort *generates* a `tickets.json`; Qval *scores* it. The user imports a ticket set, writes free-text **rules** describing how to score, defines a typed **schema** of output properties, runs an **LLM evaluation**, optionally does a **human evaluation** by hand, and saves both into a single eval file. Multiple users' eval files of the same dataset can be **merged** to produce per-ticket **means and standard deviations** (LLMs disagree even on the same model; humans disagree too).
+A local-first tool for **evaluating** customer-support tickets with an LLM and with humans, then **aggregating** many evaluators' scores. Qval is the companion to **Qbort**: Qbort *generates* a `tickets.json`; Qval *scores* it. The user imports a ticket set, writes free-text **rules** describing how to score, defines a typed **schema** of output properties, runs an **LLM evaluation**, optionally does a **human evaluation** by hand, and saves both into a single eval file. Multiple users' eval files of the same dataset can be **merged** to produce per-ticket **means and standard deviations** (LLMs disagree even on the same model; humans disagree too).
 
-> Prior art: Qval re-uses Qbort's whole architecture wholesale — `electron-vite` + React + TS + Tailwind, the strict `main` / `preload` / `shared` / `renderer` process split, `fetch`-only providers (no vendor SDKs), `safeStorage` keychain, zod validation, an allow-listed typed IPC surface, atomic JSON writes, and the monochrome neo-brutalist design system. Where a decision matches Qbort, we note it with "as in Qbort" for context, but every detail Qval depends on is restated here so this repo stands entirely on its own — no need to consult the Qbort directory.
+> Qval started as an Electron desktop app and **is** a **Claude Code plugin** now: `/qval:evaluate-tickets` for the LLM half (§18) and `/qval:review` for the parts a person does by hand (§19). `.plans/CLAUDE_SKILL_CONVERSION.md` has the staging, all of it landed. There is no Electron left in the tree. Sections that still say "the app" mean the same React UI, served to a browser tab by the review server.
+
+> Prior art: Qval re-used Qbort's architecture wholesale — React + TS + Tailwind, a strict host/renderer split, tolerant parse-and-repair validation, an allow-listed typed host surface, atomic JSON writes, and the monochrome neo-brutalist design system. Where a decision matches Qbort, we note it with "as in Qbort" for context, but every detail Qval depends on is restated here so this repo stands entirely on its own — no need to consult the Qbort directory.
 
 ---
 
 ## 1. Goals & non-goals
 
 ### Goals
-- Desktop app (macOS first; Windows/Linux capable via Electron) that **evaluates** a ticket set.
+- A tool that **evaluates** a ticket set, installed as a Claude Code plugin and driven from the directory the tickets are in.
 - Import a Qbort **`tickets.json`** as the dataset under evaluation.
 - User-authored **rules** (free-text scoring guidance) + a user-defined **schema** of typed output properties.
 - **LLM-backed evaluation**: score every ticket against the rules, emitting values that conform to the schema.
@@ -18,13 +20,13 @@ A local-first Electron desktop app for **evaluating** customer-support tickets w
 - **Merge** other users' eval files of the same dataset, pooling **all LLM evals** into one group and **all human evals** into another (mean/sd for scores, proportions/majority for booleans, distributions for enums) — **kept separate, never combined**.
 - **Compare human vs LLM** — the primary output: per property, per ticket, how the pooled LLM verdict differs from the pooled human verdict (Δ / agreement / overlap), plus a dataset-level roll-up of how closely the model tracks human judgment.
 - **Side-by-side viewer**: LLM evaluators on one side, humans on the other, with the comparison between them; click through to a per-ticket detail showing the conversation + all evaluations + both aggregates + their difference.
-- Providers: **Ollama** (local, default) and **Anthropic** — those two only. Unlike Qbort, the user **picks the Anthropic model** (fetched live).
-- **Local-only** operation except the LLM call; **API keys in the OS keychain**, never in the renderer.
+- **No API key.** The LLM evaluation runs inside Claude Code on the ambient model (§5/§18), so the tool holds no credentials.
+- **Local-only** operation. Nothing here makes a network call except the review server's own loopback socket.
 
 ### Non-goals (initial release)
 - No cloud sync, accounts, telemetry, or a central results server (merge is manual file exchange).
 - No editing of the *tickets* themselves (Qval never mutates the imported dataset).
-- OpenAI / Gemini providers (deferred, as in Qbort).
+- No LLM providers of our own — no Ollama, no bring-your-own-key, no OpenAI/Gemini. Claude Code does the LLM work (§5).
 - Inter-rater-reliability statistics beyond mean/sd/proportion/distribution (no Cohen's/Fleiss' κ in v0 — see §16).
 - Multi-window / multi-project management.
 
@@ -53,7 +55,7 @@ interface TicketMessage {
 }
 ```
 
-A `tickets.json` is `{ meta, tickets }` (Qbort's `TicketFile`). Qval keeps `meta` only for display (provider/model/counts that produced the data); it evaluates `tickets`. Qval validates the imported file with a **tolerant** zod schema (accepts any Qbort export; ignores unknown fields).
+A `tickets.json` is `{ meta, tickets }` (Qbort's `TicketFile`). Qval keeps `meta` only for display (provider/model/counts that produced the data); it evaluates `tickets`. Qval validates the imported file **tolerantly** in `lib/tickets.mjs` (accepts any Qbort export; ignores unknown fields).
 
 ### 2.2 Eval schema — the user-defined output properties
 
@@ -123,9 +125,9 @@ A file holds a list of **evaluators**, each an independent scorer of the dataset
     {
       "id": "llm",                            // stable id, unique within the file
       "kind": "llm",                          // 'llm' | 'human' — drives stream separation & aggregation
-      "name": "LLM · claude-sonnet-4-6",      // display label (NOT what identifies the stream — `kind` is)
-      "provider": "anthropic",                // llm only
-      "model": "claude-sonnet-4-6",           // llm only
+      "name": "LLM · Opus 5",                 // display label (NOT what identifies the stream — `kind` is)
+      "provider": "claude-code",              // llm only; what ran it (§5). Older files carry 'ollama'/'anthropic'.
+      "model": "Opus 5",                      // llm only; the ambient model that actually ran
       "results": [
         { "ticketId": 1, "values": { "empathy": 4, "resolved": true, "category": "billing", "notes": "Polite, fixed it." }, "evaluatedAt": "2026-07-02T18:05:00.000Z", "error": null },
         // a value auto-repaired on validation (score clamped) + a value the model couldn't produce (dropped → unscored):
@@ -156,7 +158,7 @@ Notes:
 - An LLM run **replaces** the `llm` evaluator's `results` for the targeted tickets; human edits to the `human` evaluator **upsert** and merge field-by-field (editing one property never clears others).
 - `issues[]` (optional, per result) is the **non-silent repair trail**: for each value auto-`clamped`/`coerced`/`dropped` on validation, `{ key, action, original }`. It's advisory (the viewer badges it, §9.2) and never blocks; a `dropped` field is simply absent from `values`. See the value-repair rules in §6.
 - **LLM output is never hand-edited.** A human cannot alter or clear the `llm` evaluator's values; the model owns its scores. To disagree with the model, fill in the **human** evaluation — the human-vs-LLM `comparison` (§2.6) surfaces the disagreement. (Human writes only ever touch the `human` evaluator; `applyLlmResults` is the sole writer of `llm` values.)
-- The file is written **atomically** (`fsUtil.atomicWriteJson`, as in Qbort) after human edits (debounced) and after an LLM run.
+- The file is written **atomically** (`fsUtil.atomicWriteJson`, as in Qbort) after human edits (debounced) and after each round of an LLM run.
 - Every value is re-validated against the snapshot schema on write (per the §6 coerce-or-drop rules) so a compromised renderer can't persist off-schema data; human form inputs are structurally bounded, so this mainly guards LLM output and post-hoc schema changes.
 
 ### 2.5 Fingerprints — the merge-matching identity
@@ -166,7 +168,7 @@ Two identities gate whether files may be merged. **Both must be equal** (the use
 - `dataset.fingerprint` = `sha256` of the **canonicalized tickets array** — each ticket reduced to a stable, order-independent-of-formatting form `{id, subject, status, messages:[{from:{name,email}, body, isStaff, createdAt}]}`, serialized with sorted keys. Any change to the underlying tickets changes the fingerprint. (Qbort's `meta` is excluded so re-exports of the same tickets still match.)
 - `config.fingerprint` = `sha256` of the **normalized `{schema, rules}`**: schema properties in declared order with their full definitions; rules as the trimmed free-form text. Reordering schema properties (which changes meaning) changes the fingerprint; whitespace-only differences in the rules text are normalized out.
 
-Canonicalization + hashing live in a pure, tested `shared/fingerprint.ts` so main and renderer compute identical values.
+Canonicalization + hashing live in a pure, tested `lib/fingerprint.mjs`, imported by the engine, the server, and the renderer alike, so all three compute identical values.
 
 ### 2.6 Aggregate model (derived at merge time)
 
@@ -216,40 +218,36 @@ type StreamComparison =
 - **Dataset-level roll-up** (per property, over tickets where both streams have data): scores → **mean |delta|** and a signed mean delta (does the LLM run hot or cold vs humans?) + count compared; boolean/enum → **% of tickets where LLM and human majority agree**; multi-select → **mean jaccard**. This is the app's headline — "how closely does the model track human judgment on each property" — surfaced in the summary (§9.1).
 - Aggregates are **derived, never persisted in the working file**; they're recomputed from the in-memory set of loaded files. A merged **report** can be exported separately (§10) as a flat JSON for downstream analysis.
 
-Pure, exhaustively-tested reducers live in `shared/aggregate.ts`.
+Pure, exhaustively-tested reducers live in `lib/aggregate.mjs`.
 
 ---
 
 ## 3. Settings & session model
 
-### Persisted settings (`settings.json` under Electron `userData`, no secrets — as in Qbort)
+### Persisted settings (`settings.json`, no secrets — there are none left to keep)
 
 ```ts
 interface Settings {
-  providerId: 'ollama' | 'anthropic'      // default 'ollama'
-  ollama: { host: string; model: string }
-  anthropic: { model: string | null }     // user-selected (NEW vs Qbort); null until chosen
   evaluatorName: string                    // your display name, stamped on the human evaluator (§2.4); default e.g. OS username
   schema: EvalSchema                       // persists across sessions; snapshotted into each eval file
   rules: string                            // free-form evaluation context (§2.3)
-  concurrency: number                      // eval parallelism (default 4)
-  batchSize: number                        // tickets per LLM call (default ~20, adaptive)
-  defaultDir: string | null                // where eval files are saved/opened; null → userData
-  lastWorkingPath: string | null           // most recent eval file
+  lastDatasetPath: string | null           // the tickets.json behind the working file, for relinking it by fingerprint
 }
 ```
 
+There is **no provider config**. The LLM evaluation runs inside Claude Code on the ambient model (§5/§18), so there is no key, host, model, or parallelism for a user to set. There are **no path settings** either, beyond the dataset pointer: the CLI binds every file from argv before the browser exists (§19), so a default folder and a most-recent-file pointer have nothing left to serve. `withDefaults` simply drops the fields an older release wrote, so a stale `settings.json` still loads.
+
 Settings persist automatically (no save button), as in Qbort. `schema`/`rules` here are the *working* config — the template for a **new** evaluation and the editor buffer.
 
-**The loaded file is the authoritative config source (decided).** Opening a `*.qval.json` **hydrates** the working `schema`/`rules` from that file's `meta.config` snapshot (and the `providerId`/model from its scored `llm` evaluator), so the editors mirror the file. Main reads the schema/rules used for a run / estimate / human-value validation straight from `workingFile.meta.config` (not from the loose settings), so the config that produced the data can never diverge from what the file declares. While the working file is still **unlocked** (no scored values yet), editing schema/rules re-stamps the working file's `meta.config` (re-fingerprint) so the snapshot tracks the edits during setup.
+**The loaded file is the authoritative config source (decided).** Opening a `*.qval.json` **hydrates** the working `schema`/`rules` from that file's `meta.config` snapshot, so the editors mirror the file. The host reads the schema/rules used for human-value validation straight from `workingFile.meta.config` (not from the loose settings), so the config that produced the data can never diverge from what the file declares. While the working file is still **unlocked** (no scored values yet), editing schema/rules re-stamps the working file's `meta.config` (re-fingerprint) so the snapshot tracks the edits during setup.
 
 **Config lock — once a file has real scores, its config freezes** (so a file's fingerprint/snapshot can never contradict how its data was produced):
 - **Schema + rules** freeze as soon as *any* evaluator (llm **or** human) has a result with non-empty `values` — the criteria must be identical across both streams and every ticket. Error-only / empty results don't lock (setup stays open).
-- **Provider + model** freeze once the **`llm`** evaluator has a scored result — every ticket in a run must use the same model (no finishing an Ollama run with Anthropic). A locked re-run pins provider/model to the producing evaluator, in main, regardless of the UI. `providerLocked` ⟹ `configLocked`.
-- **Storage** settings (evaluator name, default folder) stay editable always.
-- The UI disables the frozen Settings sections with a "locked — open its tickets.json to start fresh" notice. The escape hatch is **re-opening the tickets.json** (§10 OPEN), which discards the file for a fresh, fully-editable working file.
+- **The model** freezes once the **`llm`** evaluator has a scored result — every ticket in a file must be scored by the same one. `lockedLlmProvider` reports what produced it, and the skill's `plan` refuses a top-up under a different model (§18). The model is not a setting, so there is nothing in the UI to disable: it lives on the file's own evaluator.
+- The **Evaluator** tab (your display name, and the working file's path read-only) stays editable always.
+- The UI disables the frozen Settings sections with a "locked" notice. The escape hatch is a **new eval file over the same tickets** (§10), which is a fresh, fully-editable working file rather than an edit to a scored one.
 
-The lock predicates (`configLocked`, `providerLocked`, `lockedLlmProvider`) live in `shared/evalFile.ts` (pure, tested).
+The lock predicates (`configLocked`, `lockedLlmProvider`) live in `lib/evalFile.mjs` (pure, tested).
 
 ### In-memory session (not persisted as settings)
 
@@ -268,46 +266,33 @@ Two sections inside the Settings modal (tabbed, as in Qbort):
 - **Schema editor** — an ordered, editable list of properties. Each row: `label`, `key` (auto-derived from label as camelCase, editable, uniqueness-validated), `type` (select), an **"Allow multiple" toggle** (sets `multiple`; disabled/hidden for `boolean`, which can't be an array), `description`, and type-specific controls (score `min`/`max`/`step`; enum `options` as add/remove chips). Add/remove/reorder rows. Live validation with inline neo-brutalist error labels. Ships with a small **default schema** (e.g. `empathy` score 1–5, `resolved` boolean, `category` enum, `tags` multi-select enum, `notes` text) so the app is usable out of the box and demonstrates the multi-select case.
 - **Rules editor** — a single large **free-form textarea** for the evaluation context (§2.3), mirroring Qbort's editable-prompt editor: prose, definitions, and/or a criteria list, no imposed structure. Ships with a minimal starter text the user expands on. A **"Preview compiled prompt"** control shows exactly what will be sent to the LLM for a sample batch (system + rules text + schema instructions + rendered tickets + output-format block), mirroring Qbort's compiled-prompt preview.
 
-Editing schema/rules changes `config.fingerprint`. This is only permitted while the working file is **unlocked** (no scored values); each edit re-stamps the working file's `meta.config` so the snapshot stays honest. Once the file has any score, the **Schema** and **Rules** editors are disabled (and, after an LLM score, the **Provider** picker too) with a lock notice — the config that produced the data is frozen so a file can never claim a config different from the one it was scored under. To evaluate under different criteria or a different model, **re-open the tickets.json** (§10 OPEN) to start a fresh file (saved under a new name so the old one isn't overwritten).
+Editing schema/rules changes `config.fingerprint`. This is only permitted while the working file is **unlocked** (no scored values); each edit re-stamps the working file's `meta.config` so the snapshot stays honest. Once the file has any score, the **Schema** and **Rules** editors are disabled with a lock notice — the config that produced the data is frozen so a file can never claim a config different from the one it was scored under. To evaluate under different criteria or a different model, start a **new eval file** over the same tickets (§10), which leaves the old one intact.
 
 ---
 
-## 5. LLM providers (`src/main/generation/providers/` → reused as `src/main/evaluation/providers/`)
+## 5. Who runs the LLM: Claude Code, and nothing else
 
-Same `fetch`-only, main-process-only pattern as Qbort. Two providers:
+**Decided.** The evaluation runs inside Claude Code on the **ambient model** (§18), invoked as `/qval:evaluate-tickets`. There are no provider adapters, no API keys, and no in-app run.
 
-- **Ollama** (local, default) — `POST /api/chat` (or `/api/generate`) with `format: json`; `listModels()` via `GET /api/tags`; NDJSON parsed tolerantly; `done_reason: "length"` surfaced as a retryable truncation error. Host configurable (default `http://localhost:11434`). User picks the model (as in Qbort).
-- **Anthropic** — Messages API via `fetch`; JSON enforced via the prompt; prompt caching on the static prefix (system + rules + schema, identical across batches) to cut cost; `stop_reason: "max_tokens"` → retryable truncation error.
-
-### Model selection — Anthropic is now user-chosen (differs from Qbort)
-
-- **Fetch live**: `GET https://api.anthropic.com/v1/models` (requires the stored key; called in main) populates the Anthropic model dropdown. Cached in-memory for the session; a "Refresh models" control re-fetches. If the call fails (no key / offline), fall back to a small **curated** list constant so the picker is never empty (verify IDs at build time — see §16).
-- **Ollama** model list via `listModels()`, exactly as in Qbort.
-- **Pricing is not returned by the models API.** Qval keeps an optional, best-effort `pricing` map keyed by model id for known models; unknown models show cost as "—". The pre-run gate therefore shows a **token/request estimate always** and a **dollar estimate only when the chosen model's price is known** (Ollama shows "$0 · local"). Cost is advisory, never blocking.
-
-### Provider config UI
-
-Provider picker (default Ollama). For Anthropic: API-key entry (stored via `safeStorage`; UI shows only "is set"), **Test connection**, and the model dropdown (fetched). For Ollama: host + fetch-models + model dropdown. Same component shape as Qbort's `ProviderConfig`.
+- **No key, no keychain.** Nothing here ever holds a credential, which is what let the whole `safeStorage` / secrets / test-connection surface go.
+- **The model is asked for, not defaulted** — resolved from `--model`, else `$ANTHROPIC_MODEL`, else the session model, and recorded on the evaluator as `provider: 'claude-code'` + the model that actually ran. It is not a setting (§3).
+- **No cost accounting.** Ambient generation isn't a metered API call, so there is no token/dollar estimate and no pre-run confirmation gate. Nothing to price, nothing to show.
+- **Ollama and bring-your-own-key are gone**, along with the live `/v1/models` fetch, the curated fallback list, and the pricing map. Files an older release wrote still carry `provider: 'ollama'`/`'anthropic'`; they open, accept a human eval, and merge normally. Nothing tries to continue their LLM run.
 
 ---
 
-## 6. Evaluation orchestration (`src/main/evaluation/orchestrator.ts`)
+## 6. Evaluation pipeline (`plugin/skills/evaluate-tickets/engine.mjs`)
 
-Batched, Qbort-style. The unit of work is a **ticket**; the output is that ticket's `llm.values`.
+Batched. The unit of work is a **ticket**; the output is that ticket's `llm.values`. The engine owns everything structural and subagents supply only judgment (§18).
 
-- **Compile** (`shared/promptCompiler.ts`): system prompt + rules + a machine-readable description of the schema (each property's key, type, and constraints — score range, enum options, and whether it's `multiple` → an array of that type) + an explicit **output contract**: return a JSON object mapping each ticket id in the batch to a values object with exactly the schema keys and valid value types. The static prefix (system + rules + schema) is cache-controlled for Anthropic; the dynamic suffix is the batch's rendered tickets (subject + full conversation, author + role + body per message).
-- **Batching**: split the ticket list into batches (default `batchSize` ~20), **adaptively reduced** when tickets are large (long threads) or the schema is big, so expected output fits the model's token budget without truncation. `max_tokens` sized per batch from the schema shape × ticket count.
-- **Truncation handling**: providers raise a distinct retryable truncation error; the orchestrator grows `max_tokens` on retry and, at the ceiling, **splits the batch** recursively — so a big batch degrades to smaller ones rather than dropping tickets. (Same strategy as Qbort.)
-- **Concurrency**: `p-limit` (default 4). **Retry/backoff** on `429`/transient/malformed output. Per-batch failures isolated; partial success kept.
-- **Hang guard**: every provider request carries a timeout combined with the run's cancel signal, so a wedged socket can't stall the run indefinitely — a **total** cap on the non-streaming Anthropic call and an **idle** cap on the Ollama stream (reset on each chunk, so a progressing stream never trips it, only a stalled/dead one). A timeout aborts that request and is surfaced as a retryable error (the orchestrator retries it like any transient failure); the user's Cancel still stops the run immediately.
-- **Validation & repair** (`shared/validate.ts`) — **per value, never per ticket**. zod-validate each property independently against the schema and *coerce when the intent is unambiguous, drop that one value when it isn't*: `score` → clamp to `[min,max]` + snap to `step`, non-numeric drops; `boolean` → coerce `true/false/1/0/yes/no`, else drop; `enum` → exact or trim/case near-miss → canonical option, no match drops; `text` → stringify. For **`multiple` properties**: the value must be an array (a lone scalar is wrapped into a one-element array); each **element** is coerced/dropped by the same rules, then the array is **deduped**; invalid elements are removed while valid ones stay, and an empty result stays `[]` ("none apply", still a scored value) — the whole property is only *dropped* (→ unscored) if the value can't be read as an array at all. A **dropped value is just left unscored** (aggregation skips it, §8); one bad field never discards the ticket's other good values. Every coercion/drop (including per-element ones) is recorded in the result's `issues[]` (non-silent, §2.4). Two *tiers* of failure: **value-level** (above) vs **ticket-level** — a ticket the model omits or returns unparseably for (or that truncates) gets `error` set with no values.
-- **Validation retry (single)**: after a batch validates, any ticket with a ticket-level `error` **or** one or more dropped values is queued for **exactly one** automatic re-evaluation (isolated, small re-batch) — distinct from the transport/truncation retries above, and capped at one attempt to avoid useless loops. The cleaner of the two attempts is kept (per field: a value that validates on either attempt wins); genuinely unrecoverable fields stay dropped with their `issues` recorded, for the human to resolve (§9.2).
-- **Progress**: main streams `evaluation:progress` events to the renderer (tickets done, batches done, retries, dropped/errored, streaming tokens, fraction) exactly like Qbort's generation progress.
-- **Cancellation**: `AbortController`; Cancel aborts in-flight requests and stops scheduling; results so far are written.
-- **Incremental atomic writes**: after each batch, validated evals are merged into the working file and written atomically, so a crash mid-run leaves a valid file.
-- **Exclusive access — the working file is read-only during a run (sequential only)**: while an LLM run is in flight, every other mutation is blocked in **main** (the authoritative guard) and disabled in the UI — human edits (`human.setValues`), schema/rules/provider changes (`settings.set`), and `OPEN`/`MERGE` (which would swap the file out from under the run). This eliminates any run-vs-user write race by construction (no merging concurrent edits, no stale snapshots); the user edits again once the run finishes or is cancelled. One run at a time is already enforced (a second `start` is refused).
-- **Re-run modes**: evaluate **all** tickets, only **needs-attention** ones (unevaluated, errored, or with unresolved dropped values), or a **selection**. Re-running overwrites the `llm` result for the targeted tickets only (clearing their prior `issues`).
-- **Pre-run gate**: before a run, show a token/request estimate (+ dollars when known) and require confirmation, mirroring Qbort's cost gate. Ollama shows "$0 · local".
+- **Compile** (`lib/promptCompiler.mjs`): system prompt + rules + a machine-readable description of the schema (each property's key, type, and constraints — score range, enum options, and whether it's `multiple` → an array of that type) + an explicit **output contract**: return a JSON object mapping each ticket id in the batch to a values object with exactly the schema keys and valid value types. Split into a static prefix (system + rules + schema, identical across batches) and a dynamic suffix (the batch's rendered tickets: subject + full conversation, author + role + body per message).
+- **Batching**: `plan` splits the target list into batches (`--batch-size`, default 10) and writes one prompt file per batch. Subagents run them in parallel; the engine reads the answers back in node, so ticket content never enters the orchestrating agent's context.
+- **Validation & repair** (`lib/evalValidate.mjs`) — **per value, never per ticket**. Validate each property independently against the schema and *coerce when the intent is unambiguous, drop that one value when it isn't*: `score` → clamp to `[min,max]` + snap to `step`, non-numeric drops; `boolean` → coerce `true/false/1/0/yes/no`, else drop; `enum` → exact or trim/case near-miss → canonical option, no match drops; `text` → stringify. For **`multiple` properties**: the value must be an array (a lone scalar is wrapped into a one-element array); each **element** is coerced/dropped by the same rules, then the array is **deduped**; invalid elements are removed while valid ones stay, and an empty result stays `[]` ("none apply", still a scored value) — the whole property is only *dropped* (→ unscored) if the value can't be read as an array at all. A **dropped value is just left unscored** (aggregation skips it, §8); one bad field never discards the ticket's other good values. Every coercion/drop (including per-element ones) is recorded in the result's `issues[]` (non-silent, §2.4). Two *tiers* of failure: **value-level** (above) vs **ticket-level** — a ticket the model omits or returns unparseably for gets `error` set with no values.
+- **Validation retry (single)**: after `assemble`, any ticket with a ticket-level `error` **or** one or more dropped values is queued for **exactly one** automatic re-evaluation (`retry --round 1`, an isolated small re-batch), capped at one attempt to avoid useless loops. The cleaner of the two attempts is kept (per field: a value that validates on either attempt wins); genuinely unrecoverable fields stay dropped with their `issues` recorded, for the human to answer in their own eval (§9.2).
+- **Progress** is the skill's own output: `plan` says how many tickets and batches, `assemble` reports what landed, `status` reads the file back. There is no progress stream and nothing to cancel — stopping the agent stops the run.
+- **Incremental atomic writes**: `assemble` merges a round's validated evals into the eval file and writes atomically, so an interrupted run leaves a valid file.
+- **Concurrent access**: the run and a `/qval:review` browser session are separate processes over one file. `plan` records the eval file's `meta.updatedAt` and `assemble` refuses if it changed on disk, so a human evaluation made mid-run is never overwritten (§18). That check replaces the in-app run's exclusive lock, which had a single process to enforce it.
+- **Re-run modes**: evaluate **all** tickets, only **needs-attention** ones (unevaluated, errored, or with unresolved dropped values), or a **selection**. Re-running overwrites the `llm` result for the targeted tickets only (clearing their prior `issues`), and is pinned to the model already on the file (§3).
 
 ---
 
@@ -316,7 +301,7 @@ Batched, Qbort-style. The unit of work is a **ticket**; the output is that ticke
 - Human eval happens in the **ticket detail** view (§9): the conversation on one side, a **human eval form** on the other, generated from the schema — a score slider+number for `score`, a switch for `boolean`, a select for `enum`, a textarea for `text`, and for **`multiple` properties** a multi-select (chip/checkbox list for `enum`; add/remove rows for `text`/`score`). The rules are shown read-only above the form as scoring guidance, and the **LLM's values** for this ticket are shown for reference (clearly labeled as the model's, not pre-filling the human's).
 - Human edits **upsert** into the working file's `human` evaluator (§2.4), whose `name` is the `evaluatorName` from settings (editable; defaults to the OS username). If the working file has no `human` evaluator yet, the first edit creates one.
 - **Partial is fine** (the user's choice): the user evaluates any subset; each property saved independently. Edits persist automatically (debounced atomic write) to the working file — no save button.
-- **Paused during an LLM run**: while a run is in flight the working file is read-only, so the human eval form is disabled (with a notice); scoring resumes when the run finishes or is cancelled (§6). Human eval and LLM runs are never concurrent — everything is sequential.
+- **Never blocked by an LLM run**: the run is a separate process now (§6), so the form is always live. `assemble` is the side that yields — it refuses to write over an eval file that changed on disk while it was running, so a human edit made mid-run wins.
 - **Progress**: a header stat shows LLM- and human-eval completeness as a count of tickets scored (a ticket counts once it has ≥1 non-empty value — the same definition for both streams; errored or all-dropped tickets don't count). **Next unevaluated** / prev/next controls let the user sweep the queue quickly.
 - Export is allowed at any completeness (partial permitted).
 
@@ -324,8 +309,8 @@ Batched, Qbort-style. The unit of work is a **ticket**; the output is that ticke
 
 ## 8. Merge & aggregate stats
 
-- **MERGE** opens a file picker to add one or more `*.qval.json` **comparison** files. Each is validated: must parse as a Qval file and match **both** `dataset.fingerprint` **and** `config.fingerprint` of the working file. Mismatches are rejected individually with a specific reason ("different dataset" / "different rules or schema"), never silently coerced.
-- The evaluator set = **every `evaluator` from the working file plus every comparison file**. `shared/aggregate.ts` pools them **into two independent groups by `kind`** — all `llm` evaluators together, all `human` evaluators together — and computes `TicketAggregate` (§2.6) per ticket for each group (means/sd, proportions, distributions/mode, multi-hot, collected text), skipping missing values, reporting the contributing `n`. It then computes the per-property **`comparison`** (LLM group vs human group). Two files that each carry an `llm` evaluator yield `n=2` for the LLM mean; that's the cross-evaluator disagreement we're after. **The groups are never merged into a single number** — the human↔LLM comparison is the goal (§2.6).
+- **MERGE** adds one or more `*.qval.json` **comparison** files. The host offers what it found — under the CLI, every other `*.qval.json` beside the working file plus anything named with `--compare` — and the browser merges one **by id**, never by path (§19). Each is validated: must parse as a Qval file and match **both** `dataset.fingerprint` **and** `config.fingerprint` of the working file. Mismatches are rejected individually with a specific reason ("different dataset" / "different rules or schema"), shown on the candidate's own row, never silently coerced.
+- The evaluator set = **every `evaluator` from the working file plus every comparison file**. `lib/aggregate.mjs` pools them **into two independent groups by `kind`** — all `llm` evaluators together, all `human` evaluators together — and computes `TicketAggregate` (§2.6) per ticket for each group (means/sd, proportions, distributions/mode, multi-hot, collected text), skipping missing values, reporting the contributing `n`. It then computes the per-property **`comparison`** (LLM group vs human group). Two files that each carry an `llm` evaluator yield `n=2` for the LLM mean; that's the cross-evaluator disagreement we're after. **The groups are never merged into a single number** — the human↔LLM comparison is the goal (§2.6).
 - **Evaluator identity & conflicts.** An evaluator's display label is its `name`; the working file's own evaluators are marked distinctly (e.g. "(this file)"). Dedup/identity is the tuple **`(kind, name, sourceFile)`** so the *same* file added twice collapses, while two different people who both typed "Brian L." stay distinct — on a display-name collision Qval appends a disambiguating suffix (e.g. `Brian L. (2)` or the source filename). `name` is only a label; all stream math keys off `kind`.
 - **Repaired values still count** — an auto-`clamped`/`coerced` value feeds its stream at face value (a `dropped` value contributes nothing, as an unscored gap). LLM values are never hand-edited (§2.4), so an `llm` number is always model-produced (modulo automatic repair). Provenance travels with the data: the merged report (§10) carries each contributing value's `issues` markers so a downstream reader can see which numbers were auto-repaired.
 - Aggregates are recomputed reactively as files are added/removed; nothing about comparisons is written into the working file.
@@ -352,103 +337,103 @@ Pagination (not virtualization) keeps the DOM light for 5000-ticket sets, as in 
 
 ## 10. Storage, import, export
 
-`src/main/storage.ts` (Qbort-derived):
-- **OPEN** — one native open dialog that **auto-detects** the file: a Qbort `tickets.json` starts a **new working eval** (fresh evals, dataset fingerprint computed, schema/rules from current settings, `workingPath` reset so the first save prompts for a name); a `*.qval.json` **loads that working file** (and its dataset must be re-importable or the tickets travel with it — see below), **hydrating** the working schema/rules and provider/model from the file's snapshot (§3). Defaults the dialog to `defaultDir`. **Re-opening the `tickets.json` is also how you start over under new criteria**: it discards the current (possibly locked) working file for a fresh, fully-editable one, so there is no separate "new evaluation" action.
-- **Dataset provenance (decided: reference by fingerprint)**: an eval file references its dataset by fingerprint and does **not** embed the tickets (keeps files small and the tickets canonical in Qbort's file). Opening a `*.qval.json` prompts for its matching `tickets.json` if the tickets aren't already loaded; the fingerprint must match or the open is refused. Merge needs no prompt — a comparison file's scores map by ticket id onto the already-loaded dataset, and the equal `dataset.fingerprint` guarantees they line up.
-- **MERGE** — add read-only comparison eval files (§8).
-- **EXPORT** — native save dialog writing the working file (`*.qval.json`); main exports the file **it** tracks (no renderer-supplied path), as in Qbort.
-- **EXPORT MERGED REPORT** — write a flat aggregate JSON: per ticket, per property, the **llm** and **human** `PropertyAggregate`s (kept separate) **and the `comparison`** between them, plus the dataset-level human-vs-LLM roll-up per property and the contributing evaluator names. This is the artifact for "how did the model do vs the humans." Read-only, not re-importable as a working file.
-- On launch, auto-load `lastWorkingPath` if present (and, if it needs tickets, prompt), mirroring Qbort's auto-load.
+`plugin/lib/workspace.mjs` (Qbort-derived). **Every path is resolved before the browser exists**, by `qval serve` from argv and cwd (§19), so none of the actions below is a dialog and none of them takes a path from the UI.
+
+- **Binding the session** — `serve` **auto-detects** what to open: an explicit argument, else the single `*.qval.json` in the directory, else the single `tickets.json`. An ambiguous directory is refused with the list rather than guessed at. A tickets file starts a **new working eval** (fresh evals, dataset fingerprint computed, schema/rules seeded from `EVAL_SCHEMA.json` / `EVAL_RULES.md` when they exist, else from settings) and is bound to `<stem>.qval.json` straight away, so there is no unsaved state to lose. A `*.qval.json` **loads that working file**, **hydrating** the working schema/rules from its snapshot (§3). **Starting over under new criteria means a new eval file**, because the config fingerprint is exactly what merging gates on.
+- **Dataset provenance (decided: reference by fingerprint)**: an eval file references its dataset by fingerprint and does **not** embed the tickets (keeps files small and the tickets canonical in Qbort's file). Opening a `*.qval.json` relinks its `tickets.json` — already loaded, then `lastDatasetPath`, then the path the CLI resolved (the one ticket file sitting beside it, when there is exactly one) — and the fingerprint must match or the open is refused. That last step is what makes `/qval:evaluate-tickets` then `/qval:review` work in a fresh directory, where nothing has written a `lastDatasetPath` yet. Merge needs no such step: a comparison file's scores map by ticket id onto the already-loaded dataset, and the equal `dataset.fingerprint` guarantees they line up.
+- **MERGE** — add read-only comparison eval files, by candidate id (§8).
+- **Saving** — there is nothing to save. Every mutation (a human value, a config edit) is written through atomically as it happens, and the UI reports the path it is bound to rather than offering a Save-As.
+- **EXPORT MERGED REPORT** — write a flat aggregate JSON: per ticket, per property, the **llm** and **human** `PropertyAggregate`s (kept separate) **and the `comparison`** between them, plus the dataset-level human-vs-LLM roll-up per property and the contributing evaluator names. This is the artifact for "how did the model do vs the humans." Read-only, not re-importable as a working file. Its destination is **derived**, not chosen: `<working stem>.report.json`, beside the working file.
+- **Shared config with the skill** — `serve` seeds a new session from the engine's `EVAL_SCHEMA.json` / `EVAL_RULES.md` and writes back the config actually used when the session ends, so §18 and §19 always score against the same schema and rules and their files always merge.
 - All writes via `fsUtil.atomicWriteJson`; all reads via `readJson`.
 
 ---
 
 ## 11. Security model
 
-Identical posture to Qbort:
-- **Keys in OS keychain via `safeStorage`**; decrypted only in main at call time; never returned to the renderer (renderer learns only "is a key set"). Encrypted blobs under `userData`.
-- **Renderer hardening**: `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`; minimal typed `window.api` via `contextBridge`; strict **CSP** applied via `session.webRequest.onHeadersReceived` in `main/index.ts` — production `default-src 'self'`, no external `connect-src` (all network in main), plus `object-src/base-uri/frame-src/form-action` locked down.
-- **All network egress from main only** (Anthropic + Ollama fetches). Renderer makes no external requests.
-- **IPC input validated in main**: provider ids checked against the allow-list; numeric settings re-clamped; schema/rules re-validated; every persisted eval value re-validated against the schema before write; **export/merge take no renderer-supplied source path** for the working file (main tracks it).
+- **No secrets at all.** The evaluation runs on the ambient Claude Code model (§5), so there is no API key to store, decrypt, or withhold from the UI. The keychain (`safeStorage`) surface is gone rather than hardened.
+- **No egress.** Neither the UI nor the host makes an external request. The only network traffic is the review server's own loopback socket (§19), and Claude Code's, which is not ours. The served page is one self-contained file with its fonts and icons inlined as data URIs, so there is nothing for it to fetch from anywhere even if it wanted to.
+- **Renderer hardening**: the UI reaches its host through one typed surface and nothing else, `renderer/lib/apiClient.ts` over `fetch`, guarded by the token / `Host` / `Sec-Fetch-Site` stack in §19. A strict **CSP** is set on the served HTML by the review server: `default-src 'self'`, `connect-src 'self'` (same-origin only), plus `object-src/base-uri/frame-src/form-action` locked down. The bundle inlines its own JS, which `script-src 'self'` does not cover, so the server hashes each inline `<script>` of the page it is about to send and names the sha256 in the policy. `'unsafe-inline'` is never used for scripts.
+- **Input validated host-side**: schema/rules re-validated; every persisted eval value re-validated against the **file's** schema before write; **no endpoint or handler takes a renderer-supplied path** (the host tracks the working file, and under the CLI it is bound before the browser exists).
 
 ---
 
 ## 12. Tech stack & project structure
 
-Same stack as Qbort: `electron-vite` (Electron + Vite, TS); React + TypeScript + Tailwind + shadcn/Radix primitives restyled neo-brutalist; **zod**; **p-limit**; client-side pagination (100/page); plain `fetch` providers (no SDKs); **Vitest** unit + integration; `electron-builder` packaging. Path aliases `@shared/*` and `@/*`. TypeScript strict, `noUnusedLocals`.
+React + TypeScript + Tailwind + shadcn/Radix primitives restyled neo-brutalist; client-side pagination (100/page); **Vitest** unit + integration. Path aliases `@shared/*` (types), `@lib/*` (the pure `.mjs` logic), and `@/*`, declared once in a single `tsconfig.json` (DOM and node libs together, since the tests drive the browser's client against a real `node:http` server). TypeScript strict, `noUnusedLocals`. The logic has **no runtime dependencies at all** — it has to run on bare `node` inside the plugin, so it validates with plain guards rather than a schema library.
+
+**The build is one thing: the UI.** `vite` + `vite-plugin-singlefile` inline every byte of JS, CSS, and font into a committed `plugin/ui/index.html` (~430 KB), which is what lets the plugin install with no build step. `npm run check:ui` rebuilds and diffs it, and CI runs that. The logic ships as the `.mjs` files themselves, and the server and engine run on bare node, so nothing else needs building. `electron`, `electron-vite`, and `electron-builder` are all gone, along with the main process they built.
 
 ```
 qval/
-├─ package.json · electron.vite.config.ts · tsconfig*.json
+├─ package.json · vite.config.mts · vitest.config.ts · tsconfig.json
 ├─ tailwind.config.cjs · postcss.config.cjs
+├─ scripts/checkUiBundle.mjs      # rebuilds the UI and fails on drift from the committed copy
 ├─ src/
-│  ├─ main/
-│  │  ├─ index.ts                 # lifecycle, BrowserWindow, CSP
-│  │  ├─ ipc.ts                   # typed IPC handlers
-│  │  ├─ secrets.ts               # safeStorage/keychain
-│  │  ├─ settings.ts              # persisted non-secret config (schema, rules, providers)
-│  │  ├─ storage.ts               # tickets import + eval file open/save/export/merge
-│  │  ├─ fsUtil.ts                # atomicWriteJson / readJson
-│  │  ├─ connection.ts            # provider test-connection
-│  │  └─ evaluation/
-│  │     ├─ orchestrator.ts       # batching, concurrency, retry, progress, cancel, atomic writes
-│  │     ├─ service.ts · estimate.ts
-│  │     └─ providers/
-│  │        ├─ types.ts · models.ts        # curated fallback list + optional pricing map
-│  │        ├─ anthropic.ts · ollama.ts    # openai/gemini deferred
-│  ├─ preload/
-│  │  └─ index.ts                 # contextBridge → window.api
 │  ├─ shared/
-│  │  ├─ types.ts                 # data model + IPC contract (source of truth)
-│  │  ├─ schema.ts                # EvalProperty helpers, defaults, validation
-│  │  ├─ rules.ts                 # free-form rules default + normalize (for fingerprint)
-│  │  ├─ fingerprint.ts           # dataset + config canonical hashing
-│  │  ├─ promptCompiler.ts        # rules + schema + tickets → compiled eval prompt
-│  │  ├─ validate.ts              # zod: imported tickets + LLM eval output
-│  │  ├─ aggregate.ts             # mean/sd/proportion/distribution reducers
-│  │  └─ evalFile.ts              # eval-file read/normalize/merge helpers
+│  │  ├─ types.ts                 # data model + host contract (source of truth)
+│  │  └─ *.test.ts                # the suites covering plugin/lib/
 │  └─ renderer/
-│     ├─ index.html · main.tsx · App.tsx
+│     ├─ index.html · main.tsx · App.tsx · index.css · fonts.css (self-hosted Inter + Plex Mono)
 │     ├─ components/
 │     │  ├─ ui/                   # restyled neo-brutalist primitives
-│     │  ├─ TopBar.tsx            # title · OPEN · EVALUATE · MERGE · EXPORT · gear (file actions disabled during a run)
-│     │  ├─ SettingsModal.tsx     # tabbed: provider · schema · rules · storage
+│     │  ├─ TopBar.tsx            # title · MERGE · FINISH · gear
+│     │  ├─ MergeModal.tsx        # the CLI-resolved merge candidates, by name
+│     │  ├─ SettingsModal.tsx     # tabbed: schema · rules · evaluator
 │     │  ├─ SchemaEditor.tsx      # typed property rows
 │     │  ├─ RulesEditor.tsx       # free-form rules textarea + compiled-prompt preview
-│     │  ├─ ProviderConfig.tsx    # provider picker, key entry, model fetch, test
-│     │  ├─ EvaluateModal.tsx     # run flow: estimate gate → progress → cancel
 │     │  ├─ DatasetView.tsx       # paginated results table + summary, aggregate cells, stream toggle
 │     │  ├─ Pagination.tsx
 │     │  ├─ TicketDetailModal.tsx # conversation + human form + side-by-side + aggregate
 │     │  └─ HumanEvalForm.tsx     # schema-driven inputs
 │     ├─ state/                   # Settings/Dataset/WorkingFile/Comparison/Toast contexts
-│     └─ lib/                     # utils, format, hooks (createSafeContext, useSecretStatus)
+│     └─ lib/                     # apiClient.ts (the fetch data layer), utils, format, hooks
+├─ plugin/                        # the shipped Claude Code plugin (§18)
+│  ├─ bin/qval                    # the CLI: serve · status (§19)
+│  ├─ skills/evaluate-tickets/
+│  │  └─ SKILL.md · engine.mjs · templates/
+│  ├─ skills/review/
+│  │  └─ SKILL.md
+│  ├─ ui/index.html               # the built UI, one committed self-contained file
+│  ├─ server/server.mjs           # the localhost review server (§19)
+│  └─ lib/                        # THE logic, imported by the app, the engine, and the server
+│     ├─ types are in src/shared/types.ts; these files carry JSDoc pointing at it
+│     ├─ schema · rules · fingerprint · promptCompiler · evalValidate · evalFile
+│     ├─ tickets · aggregate · settings · evaluation
+│     ├─ workspace · settingsStore   # session + persisted settings (were src/main/*.ts)
+│     └─ fsUtil · args
+└─ test/
+   ├─ skillEngine.test.ts         # engine subcommands over child_process, in a temp dir
+   ├─ cli.test.ts                 # bin/qval the same way, killing the detached child it leaves
+   ├─ server.test.ts              # the review server over real HTTP on a loopback port
+   └─ reviewRoundTrip.test.ts     # the renderer's own client against that server, and the merge
 ```
 
-### IPC surface (preload `window.api`) — allow-listed, typed
-- `settings.get()` / `settings.set(partial)`  *(setting `schema`/`rules` re-stamps an unlocked working file's config, §3)*
-- `secrets.setKey(provider,key)` / `hasKey(provider)` / `clearKey(provider)` / `status()`
-- `provider.testConnection(provider)`
-- `ollama.listModels(host)` · `anthropic.listModels()`  *(main fetches `/v1/models` with the stored key)*
-- `session.open()` (auto-detects `tickets.json` vs `*.qval.json`; a `tickets.json` starts a fresh eval) / `loadLast()` / `save()`
-- `session.addComparison()` / `removeComparison(id)` / `exportReport()`
-- `evaluation.estimate(mode)` / `start(mode)` / `cancel()` + `onProgress(cb)`
-- `human.setValues(ticketId, values)` (upsert into the working file's `human` evaluator)
-- `dialog.chooseDirectory()`
+### The host surface (`IpcApi` in `shared/types.ts`) — allow-listed, typed
 
-The **compiled-prompt preview** (§4) runs the pure `shared/promptCompiler` in the renderer — no IPC round-trip. All heavy logic lives in `shared/` pure modules; IPC handlers are thin.
+Named for the IPC bridge it started as, and there is exactly one implementation of it left: `renderer/lib/apiClient.ts`, over `fetch` against the review server. The members below map onto §19's endpoints. The provider, secret, and evaluation members are **gone** (the LLM run moved to §18 and took them with it), and so are the native file dialogs (`session.open`, Save-As, `addComparison`, `dialog.chooseDirectory`), because the CLI resolves every path before the browser exists and there is nothing left to pick.
+
+- `app.getVersion()` — from `GET /api/session`
+- `settings.get()` / `settings.set(partial)` — `GET /api/session` and `POST /api/config`, which accepts `schema`, `rules`, and `evaluatorName` and nothing else *(setting `schema`/`rules` re-stamps an unlocked working file's config, §3)*
+- `session.loadLast()` — the session the host bound at launch, `GET /api/session`
+- `session.save()` — reports the bound path. There is nothing to write, since every mutation is already persisted.
+- `session.mergeComparison(id)` / `unmergeComparison(id)` — `POST /api/comparison`, by **candidate id**, never a path
+- `session.exportReport()` — `POST /api/export`, empty body, destination derived from the working file
+- `human.setValues(ticketId, values)` — `POST /api/result`, upsert into the working file's `human` evaluator
+- `review.done()` — `POST /api/done`, ends the session (§19)
+
+The **compiled-prompt preview** (§4) runs the pure `lib/promptCompiler.mjs` in the renderer, with no round-trip to the host at all. All heavy logic lives in the pure `lib/` modules, so the server's handlers stay thin.
 
 ---
 
 ## 13. UI layout & visual design
 
-Neo-brutalist, strictly **monochrome** black/white/grays, minimal, high-contrast — identical token set to Qbort (`ink`, `paper`, `staff` slate for staff messages only), 2px black borders, square corners (`rounded-none`), solid offset `shadow-brutal`, flat fills, **UPPERCASE mono** buttons/labels; status by borders/weight/labels, not color. shadcn/Radix primitives restyled in `components/ui/`.
+Neo-brutalist, strictly **monochrome** black/white/grays, minimal, high-contrast — identical token set to Qbort (`ink`, `paper`, `staff` slate for staff messages only), 2px black borders, square corners (`rounded-none`), solid offset `shadow-brutal`, flat fills, **UPPERCASE mono** buttons/labels; status by borders/weight/labels, not color. shadcn/Radix primitives restyled in `components/ui/`. **Inter and IBM Plex Mono are bundled** (latin, 400 and 700, inlined as woff2 data URIs) rather than assumed to be installed, which they never are on someone else's machine. The score slider is styled for both engines (`::-webkit-slider-thumb` and `::-moz-range-thumb`, as separate rules since an unrecognized pseudo-element invalidates the whole selector).
 
 Single page:
-- **Top bar**: title left; right: `OPEN`, `EVALUATE`, `MERGE`, `EXPORT`, gear (settings). `OPEN` a `tickets.json` starts a fresh evaluation (and is how you start over under new criteria, §10); `EVALUATE` is the primary (solid) action.
-- **Body**: the results table (§9.1) with filter/search + summary; empty state prompts `OPEN` a `tickets.json` to start.
-- **Settings modal** (gear): tabbed — Provider · Schema · Rules · Storage.
-- **Evaluate modal** (`EVALUATE`): estimate gate → live progress + Cancel; run state persists if closed mid-run (as in Qbort).
+- **Top bar**: title left; right: `MERGE` (only when the host offered candidates), `FINISH`, gear (settings). There is no `OPEN`, no `EXPORT`, and no `EVALUATE`. The CLI binds the files before the tab exists (§19), every edit is persisted as it happens, and the LLM run is `/qval:evaluate-tickets` (§18) — a different process and often a different sitting. `FINISH` ends the session and leaves the page on a terminal panel, because the server is gone by then.
+- **Body**: the results table (§9.1) with filter/search + summary; the report export sits with the merged roster in the summary, where it belongs. The empty state explains that `/qval:review` opens whatever the command line points it at.
+- **Settings modal** (gear): tabbed — Schema · Rules · Evaluator.
 - **Ticket detail modal**: conversation + human form + side-by-side + aggregate (§9.2).
 
 ---
@@ -457,14 +442,15 @@ Single page:
 
 1. **Scaffold + design system** — copy Qbort's electron-vite + React + TS + Tailwind + hardened BrowserWindow / preload / CSP; port the neo-brutalist `ui/` primitives; single-page shell (top bar, settings modal, evaluate modal, detail modal); hello-world IPC.
 2. **Settings + secrets + providers** — settings.json (schema, rules, providers, storage); `safeStorage`; ProviderConfig with **Anthropic model fetch** + Ollama model list + test connection.
-3. **Schema + rules** — `shared/schema.ts` / `rules.ts` (+ defaults), SchemaEditor, RulesEditor, promptCompiler + compiled preview; `fingerprint.ts`.
+3. **Schema + rules** — `lib/schema.mjs` / `rules.mjs` (+ defaults), SchemaEditor, RulesEditor, promptCompiler + compiled preview; `fingerprint.mjs`.
 4. **Dataset import + eval file** — tickets import + tolerant validation + dataset fingerprint; working-file create/open/save (atomic); `evalFile.ts`.
 5. **Evaluation orchestrator** — batching, adaptive size, truncation split, concurrency, retry, progress streaming, cancel, incremental atomic writes, per-ticket error capture, re-run modes; estimate gate.
 6. **Human eval** — schema-driven HumanEvalForm, detail modal, debounced autosave, completeness stats, next-unevaluated sweep.
 7. **Merge + aggregate + viewer** — `aggregate.ts`, MERGE flow with fingerprint gating, `DatasetView` results-table aggregate cells + stream toggle, side-by-side in detail, summary roll-ups, merged-report export.
 8. **Polish & tests** — full Vitest unit + integration suite (added incrementally per phase, not deferred), empty/error states, estimate confirmation.
-9. **Packaging** — electron-builder unsigned universal `.dmg`/`.zip` via a tag-triggered GitHub Actions draft release; documented Gatekeeper bypass; manual updates. (Mirrors Qbort.)
-10. **Headless evaluation (Claude Code skill)** — `.claude/skills/evaluate-tickets/`: dependency-free ports of the pure logic plus a parity test, `engine.mjs` (`init`/`config`/`plan`/`assemble`/`retry`/`status`), engine tests, `SKILL.md`/`README.md`, and the app-side block on skill-produced files (§18).
+9. **Packaging** — electron-builder unsigned universal `.dmg`/`.zip` via a tag-triggered GitHub Actions draft release; documented Gatekeeper bypass; manual updates. (Mirrors Qbort.) *Removed in stage 6 of phase 11: distribution is the plugin marketplace now, and the last DMG stays on Releases for anyone with old files.*
+10. **Headless evaluation (Claude Code skill)** — `plugin/skills/evaluate-tickets/`: `engine.mjs` (`init`/`config`/`plan`/`assemble`/`retry`/`status`) over the shared `plugin/lib/`, engine tests, `SKILL.md`/`README.md` (§18).
+11. **Conversion to a Claude Code plugin** (done) — the desktop app became two commands, `/qval:evaluate-tickets` and `/qval:review`. One copy of the logic in `plugin/lib/`, the review server (§19), a fetch data layer in place of the preload bridge, the in-app LLM path deleted (§5), a single-file UI bundle, the CLI, then Electron itself. Staged in `.plans/CLAUDE_SKILL_CONVERSION.md`.
 
 Tests land alongside each phase.
 
@@ -472,50 +458,71 @@ Tests land alongside each phase.
 
 ## 15. Testing strategy
 
-Same discipline as Qbort — every module in `shared/` and `main/` ships a colocated `*.test.ts` (Vitest); tests are **deterministic** (no real network — providers mocked; `safeStorage` faked; `rng`/`now`/`sleep` injectable).
+Every module in `plugin/lib/` ships a `*.test.ts` named after it in `src/shared/` (Vitest), since a `.test.ts` inside the shippable plugin folder would need vitest and TypeScript to run. Tests are **deterministic** (no real network; `now` injectable).
 
 - **Unit (pure logic)**: `fingerprint` (identical hashes for reordered-formatting, different for content changes; dataset vs config independence), `aggregate` (mean/sd with n<2, proportions, enum distribution/mode, missing-value skipping, llm/human separation), `schema`/`rules` validation, `validate` (clamp/coerce/drop of LLM output), `promptCompiler` (schema+rules render, output contract), `evalFile` merge/normalize.
-- **Integration (cross-module)**: import tickets → compile → mocked provider batch → validate → write working file → reopen; run + cancel keeps partial; adaptive-split on injected truncation preserves ticket count; merge of matching files → correct aggregates; merge refusal on fingerprint mismatch; human edits persist field-by-field.
-- **Practices**: side effects (fs/fetch/Electron) at the edges; writes via `fsUtil`; run `typecheck` + `test` before a change is done.
+- **Integration (cross-module)**: the engine's subcommands driven over `child_process` in a temp dir with pre-written batch files standing in for subagents (`test/skillEngine.test.ts`); the review server over real HTTP on a loopback port (`test/server.test.ts`); the renderer's own `apiClient` against that server, and a file the engine wrote merging with a file the browser wrote (`test/reviewRoundTrip.test.ts`, which is what replaced the parity test when the logic collapsed to one copy); merge of matching files → correct aggregates; merge refusal on fingerprint mismatch; human edits persist field-by-field.
+- **Build**: `npm run check:ui` rebuilds the single-file UI bundle and fails if the committed `plugin/ui/index.html` has drifted. It is a committed artifact, so this is the discipline that keeps it honest.
+- **Practices**: side effects (fs, http) at the edges; writes via `fsUtil`; run `typecheck` + `test` before a change is done.
 
 ---
 
 ## 16. Decisions & build-time verifications
 
-**Decided:** decoupled rules/schema; four base property types (score/boolean/enum/text), each optionally **multi-valued via a `multiple` flag** (array of that type; allowed for enum/score, not boolean/text, no nesting; `[]` = "none apply" ≠ missing; multi-select enum aggregates multi-hot with per-option selection rate + majority consensus); one LLM pass per ticket per file with averaging across merged files; **LLM and human streams are aggregated separately and never pooled — the primary output is the human-vs-LLM `comparison`** (per-property Δ/agreement/jaccard, plus a dataset-level roll-up of how closely the model tracks human judgment); Anthropic model **fetched** from `/v1/models` (pricing best-effort); merge requires **dataset + schema + rules** all match; **both fingerprints hash canonicalized content** (dataset = meaningful ticket fields sorted, ignoring meta/formatting; config = normalized schema + rules) so re-exports/reformatting still match while any content change doesn't; eval files **reference the dataset by fingerprint** (not embedded — §10); the **loaded eval file is the authoritative config source** — opening hydrates schema/rules (and provider/model) from its snapshot, main reads run/validate config from `workingFile.meta.config`, and once the file has scored values its **schema/rules freeze** (any scored value, llm or human) and its **provider/model freeze** (any scored *llm* value), editable again only by re-opening the `tickets.json`, which starts a fresh working file (§3/§4); human eval **optional/partial**; **batched** evaluation; **validation is per-value** (coerce-or-drop, never discard a whole ticket; drops become unscored gaps) with a non-silent `issues` trail, **one automatic validation retry** per failed/dropped ticket (capped at one to avoid loops); **LLM output is never hand-editable** — a human cannot alter/clear the `llm` evaluator's values (to disagree with the model, fill the human eval; the human-vs-LLM comparison surfaces it); **the working file is read-only during an LLM run** — human edits, config/provider changes, and open/merge are all blocked (in main + UI) so access is strictly sequential and nothing races the run's writes (§6); **evaluator-centric eval file** — a list of evaluators each with `kind` (`llm`/`human`), a display `name` (human name entered in run config), and an explicit `results[]` keyed by `ticketId`; identity/dedup on `(kind, name, sourceFile)`, stream math keyed on `kind`; providers Ollama + Anthropic only; **the LLM evaluation can also be run headlessly from a Claude Code skill** with the ambient model instead of an API key (§18), whose files record `provider: 'claude-code'` plus the model that actually ran, are ordinary eval files in every other respect (they open, accept a human eval, and merge with app-produced files of the same dataset + config), and are **blocked from an in-app LLM re-run** in both `EvaluationService.estimate` and `.start` (topping one up in-app would put a second model's values inside the one `llm` evaluator whose recorded model says otherwise).
+**Decided:** decoupled rules/schema; four base property types (score/boolean/enum/text), each optionally **multi-valued via a `multiple` flag** (array of that type; allowed for enum/score, not boolean/text, no nesting; `[]` = "none apply" ≠ missing; multi-select enum aggregates multi-hot with per-option selection rate + majority consensus); one LLM pass per ticket per file with averaging across merged files; **LLM and human streams are aggregated separately and never pooled — the primary output is the human-vs-LLM `comparison`** (per-property Δ/agreement/jaccard, plus a dataset-level roll-up of how closely the model tracks human judgment); merge requires **dataset + schema + rules** all match; **both fingerprints hash canonicalized content** (dataset = meaningful ticket fields sorted, ignoring meta/formatting; config = normalized schema + rules) so re-exports/reformatting still match while any content change doesn't; eval files **reference the dataset by fingerprint** (not embedded — §10); the **loaded eval file is the authoritative config source** — opening hydrates schema/rules from its snapshot, the host validates against `workingFile.meta.config`, and once the file has scored values its **schema/rules freeze** (any scored value, llm or human) and its **model is pinned** (any scored *llm* value), editable again only by re-opening the `tickets.json`, which starts a fresh working file (§3/§4); human eval **optional/partial**; **batched** evaluation; **validation is per-value** (coerce-or-drop, never discard a whole ticket; drops become unscored gaps) with a non-silent `issues` trail, **one automatic validation retry** per failed/dropped ticket (capped at one to avoid loops); **LLM output is never hand-editable** — a human cannot alter/clear the `llm` evaluator's values (to disagree with the model, fill the human eval; the human-vs-LLM comparison surfaces it); **evaluator-centric eval file** — a list of evaluators each with `kind` (`llm`/`human`), a display `name` (human name entered in run config), and an explicit `results[]` keyed by `ticketId`; identity/dedup on `(kind, name, sourceFile)`, stream math keyed on `kind`.
+
+**Decided later, and it removed a lot:** **the LLM evaluation runs in Claude Code on the ambient model, and nowhere else** (§5/§18). Ollama, Anthropic-with-your-own-key, the provider adapters, `safeStorage`, the live model fetch, the pricing map, the cost estimate gate, and the in-app run (with its progress stream, cancel, and read-only-during-a-run lock) are all gone rather than deprecated. Files record `provider: 'claude-code'` plus the model that actually ran. Files an older release wrote keep their own `provider` string and are ordinary eval files in every respect that survives: they open, accept a human eval, and merge with new files of the same dataset + config. Nothing offers to continue their LLM run, because nothing here runs one.
 
 **Verify at build time (knowledge-cutoff caveats):**
-- Anthropic `GET /v1/models` response shape + the curated fallback model IDs (Opus/Sonnet/Haiku 4.x current ids).
-- Best-effort Anthropic pricing map (per model id) for the advisory cost estimate; unknown → "—".
-- Ollama chat/JSON endpoint + `done_reason` truncation field names.
 - κ / inter-rater-reliability stats are a **future** addition, not v0.
 
 ---
 
 ## 17. Final verification checklist (before release) ⚠️
 
-- `npm run typecheck` + `npm test` green; deterministic tests (no real network/keychain).
-- Renderer never receives an API key; CSP verified in a production build; egress only from main.
-- Import a real Qbort `tickets.json`, run an Ollama eval end-to-end (no key needed), then an Anthropic eval; cancel mid-run leaves a valid partial file.
+- `npm run typecheck` + `npm test` green; deterministic tests (no real network).
+- `npm run check:ui` green, so the committed bundle is the one the sources build.
+- CSP verified on the served page; no egress from either side (§11).
+- The UI opened in a browser that has neither Inter nor IBM Plex Mono installed, and in one that is not Chromium (the score slider and the fonts are the two things that fail quietly there).
+- Score a real Qbort `tickets.json` end-to-end with `/qval:evaluate-tickets`; an interrupted run leaves a valid partial file.
 - Human eval autosave (partial) survives reload; completeness stats correct.
 - Merge two independently-produced files of the same dataset+config → mean/sd/proportion/distribution correct; refuse a mismatched file with a specific reason.
-- Export working file + merged report; re-open exported working file.
-- Anthropic model list fetches live; falls back to curated list offline; cost estimate shows dollars only when price known, "$0 · local" for Ollama.
-- Unsigned `.dmg`/`.zip` built; Gatekeeper bypass documented in README.
-- Skill round trip: score a dataset from the CLI, open the file in the app, add a human eval, merge an app-produced file of the same dataset + config, export the report. EVALUATE on the skill file explains the block instead of running.
+- Export the merged report; re-open the working file it was derived from.
+- Round trip: score a dataset with `/qval:evaluate-tickets`, open it with `/qval:review`, add a human eval, merge a second file of the same dataset + config, export the report, click Finish, and confirm `qval status` reports `done`.
+- A review session started where `$BROWSER=true` (Claude Code's agent view) reports `OPENED no` and still prints a working URL.
+- A schema built in the browser is one `/qval:evaluate-tickets` can then run against, and vice versa (the shared `EVAL_SCHEMA.json` / `EVAL_RULES.md`, §10).
+- A `*.qval.json` from the desktop release (carrying `provider: 'ollama'`/`'anthropic'`) still opens, accepts a human eval, and merges.
 
 ---
 
 ## 18. Headless evaluation (Claude Code skill)
 
-An alternative to §6 for the **LLM evaluation only**: `.claude/skills/evaluate-tickets/` runs the same evaluation inside Claude Code using the **ambient model** (parallel subagents), so a user with no Anthropic API key can still produce a complete `*.qval.json`. Everything else in this spec stays app work, unchanged: viewing tickets and scores (§9), the human evaluation (§7), merge/aggregate/comparison (§8), and export (§10). The folder is copyable to `~/.claude/skills/` and runs on bare `node` with no `npm install`.
+The **LLM evaluation**, and the only one there is: `plugin/skills/evaluate-tickets/` runs it inside Claude Code using the **ambient model** (parallel subagents), so nobody needs an API key to produce a complete `*.qval.json`. §6 is its pipeline. Everything else in this spec is browser work, unchanged: viewing tickets and scores (§9), the human evaluation (§7), merge/aggregate/comparison (§8), and export (§10). It runs on bare `node` with no build step and no `npm install`; distribution is the plugin marketplace (§19), from GitHub or from a local clone.
 
 **Boundary.** A dependency-free `engine.mjs` owns everything structural: tickets parsing, both fingerprints (§2.5), target selection (§6 re-run modes), batching, prompt compilation (§2.3), per-value validation and repair (§6), retry accounting, eval-file assembly (§2.4), and atomic writes. The subagents own only judgment: read a compiled prompt file, write a JSON object of schema-keyed values. Ticket `id`s come from the dataset and are never trusted from the model, exactly as in the app. The engine reads the batch files in Node, so ticket content and scores never enter the orchestrating agent's context.
 
 - **Commands.** `init` (scaffold `EVAL_RULES.md` + `EVAL_SCHEMA.json`, then stop) · `config --check|--write|--preview` · `plan` · `assemble --round <r>` · `retry --round 1` · `status`. Exit codes are the skill's control flow: `0` ok, `1` usage/malformed flag, `2` unusable state, `3` scaffolded.
-- **Ported logic.** `lib/*.mjs` mirrors `shared/schema`, `rules`, `fingerprint`, `promptCompiler`, `evalValidate`, `evalFile` and `main/fsUtil`, with zod replaced by equivalent plain guards. `test/skillParity.test.ts` runs both implementations over one case table, because silent fingerprint drift would mean CLI and app files quietly stop merging, with no other symptom.
-- **Recorded evaluator.** `provider: 'claude-code'`, `model` = the model that actually ran (resolved explicitly, from `$ANTHROPIC_MODEL`, or from the session model, and *asked for* rather than defaulted), `name` = `LLM · <model>` from the app's own convention. `plan` refuses when that model disagrees with the one already on the file's scored `llm` evaluator, the CLI-side equivalent of the §3/§4 provider lock.
+- **Shared logic.** `plugin/lib/*.mjs` is not a copy of the UI's logic, it *is* the UI's logic: `schema`, `rules`, `fingerprint`, `promptCompiler`, `evalValidate`, `evalFile`, `tickets`, `aggregate`, `settings`, `evaluation`, `workspace`, `settingsStore`, `fsUtil`. The renderer and the review server (§19) import the same files, the renderer through the `@lib/*` alias. Dependency-free ESM so it runs on bare `node`, with JSDoc types on the exported signatures so the TypeScript side still type-checks. There is one copy, so there is nothing for the fingerprints to drift against.
+- **Recorded evaluator.** `provider: 'claude-code'`, `model` = the model that actually ran (resolved explicitly, from `$ANTHROPIC_MODEL`, or from the session model, and *asked for* rather than defaulted), `name` = `LLM · <model>` from the app's own convention. `plan` refuses when that model disagrees with the one already on the file's scored `llm` evaluator (`lockedLlmProvider`), which is the §3/§4 model pin.
 - **Retry.** One round, matching §6's single automatic validation retry. `assemble` merges cleaner-wins against the first-pass snapshot, so a value that validated the first time survives a worse retry.
-- **Concurrency with the app.** `plan` records the eval file's `meta.updatedAt` and `assemble` refuses if it changed on disk, so a human evaluation made mid-run is never overwritten.
-- **The app-side block.** `llmRunBlockReason` (in `shared/evalFile.ts`) returns non-null for a file whose scored `llm` evaluator is pinned to a provider the app has no adapter for. `EvaluationService.estimate` and `.start` both throw it (so bypassing the UI doesn't help), `evaluationReadiness` folds it in, EVALUATE is disabled with "Scored by the Claude Code skill. Continue the LLM run from the CLI.", and ProviderConfig's lock notice names the skill. The escape hatch is unchanged: re-open the `tickets.json` for a fresh working file.
-- **No cost accounting.** Ambient generation isn't a metered API call, so the §6 estimate gate has no equivalent. The skill has no token or cost numbers to show.
+- **Concurrency with a review session.** `plan` records the eval file's `meta.updatedAt` and `assemble` refuses if it changed on disk, so a human evaluation made mid-run is never overwritten.
+- **No cost accounting.** Ambient generation isn't a metered API call, so there is no estimate gate anywhere. The skill has no token or cost numbers to show.
+
+---
+
+## 19. The review server (browser handoff)
+
+The counterpart to §18. Where `evaluate-tickets` runs the LLM half headlessly, `/qval:review` opens the parts a person has to do by hand — schema and rules setup (§3/§4), the human evaluation (§7), and the comparison view (§8/§9) — in an ordinary browser tab, served by a dependency-free node server in `plugin/server/server.mjs`.
+
+**The server never sees a path.** Every path (the `tickets.json`, the `*.qval.json`, and each file on offer to merge) is resolved by the CLI from argv and cwd before the browser exists, and handed to a `Workspace` that is already bound. No endpoint accepts a path from the client, which removes the path-traversal problem outright rather than defending against it. This is the browser-side restatement of §11's "export/merge take no renderer-supplied source path". A merge names a **candidate id**; an export names nothing at all.
+
+- **Surface.** `GET /` (the single-file UI bundle) · `GET /api/session` (version + settings + session snapshot, the snapshot carrying the merge candidates as `{id, name, merged}`) · `GET /api/events` (SSE) · `POST /api/config` (schema · rules · evaluatorName, and nothing else) · `POST /api/result` (one ticket's human values) · `POST /api/comparison` (`{id, merge}` — merge or un-merge a candidate) · `POST /api/export` (write the merged report, empty body) · `POST /api/done`. There is no other route, and no static directory. The page declares its own inline data-URI favicon, so `/favicon.ico` is never requested (it would be the one request the browser makes with no token on it).
+- **Access control.** Bind `127.0.0.1` explicitly. A per-session 256-bit token on every request, compared in constant time, presented as `?t=` on the first page load and as `X-Qval-Token` thereafter. The `Host` header is pinned to the loopback literals on our own port, which is the DNS-rebinding defense specifically. Mutations require `Sec-Fetch-Site: same-origin` (absent counts as refused). No CORS headers are emitted and no preflight is answered. Bodies are capped at 1 MiB. §11's CSP carries over onto the served HTML, with `script-src` naming the sha256 of the bundle's inline script instead of allowing inline scripts wholesale.
+- **Validation.** `POST /api/result` re-validates every value against the **file's** schema (§2.4), exactly as the IPC path did, so a hostile page cannot persist off-schema data. `POST /api/config` allow-lists three fields; the rest of `Settings` is unreachable from the browser. `POST /api/comparison` resolves its id against the candidate list the CLI supplied and 409s on anything else, so an unoffered id is a refusal rather than a read.
+- **The client lease.** Scoring 200 tickets by hand takes an hour, which no Bash timeout survives, so the server runs detached. An SSE stream is the lease: while the tab holds it the session is live, and once it has been gone for a grace period (long enough to survive a reload) the session resolves as `abandoned`. The UI's **Finish** button posts `/api/done`, which resolves it as `done`. A session nobody ever opens gives up after five minutes rather than holding a port forever.
+
+**The CLI (`plugin/bin/qval`).** Two subcommands, both dependency-free node.
+
+- `serve [<file>] [--compare a,b] [--port N] [--no-open] [--out .qval-run]` resolves the files (§10), starts the server in a **detached child**, opens a browser, and returns immediately with `SERVING` + `URL` + `WORKING_FILE` + `CANDIDATES` + `OPENED`. The parent does the resolution itself so an ambiguous or empty directory fails fast with an exit code (0 ok, 1 bad flag, 2 unusable state) instead of in a detached process's log. A session already live in that directory answers `ALREADY_SERVING` with the same URL rather than starting a second one.
+- **Opening the browser** honours `$BROWSER` when it is a real command, and treats the sentinel values (`true`, `none`, `echo`, `:`, empty) as "no browser here" — Claude Code's own agent view sets `BROWSER=true`, and shelling out naively would run `true <url>`, exit 0, and leave the session waiting for a tab that never arrives. The URL is printed either way, because it is the only way in and it carries the session token.
+- `status [--eval-file <path>]` reads the session record the child leaves in `.qval-run/review-session.json` (`live` / `done` / `abandoned` / `stale` when the process died without recording an outcome / `none`) and prints the eval file's scored counts. It is how the answer gets back to Claude, since the session outlives the command that started it. The record is chmod 0600 while live, because it holds the URL and the URL holds the token; both are cleared when the session ends.

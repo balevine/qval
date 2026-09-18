@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_SETTINGS, LIMITS, mergeSettings, withDefaults } from './settings'
-import { DEFAULT_SCHEMA } from './schema'
+import { DEFAULT_SETTINGS, mergeSettings, withDefaults } from '@lib/settings.mjs'
+import { DEFAULT_SCHEMA } from '@lib/schema.mjs'
 
 describe('withDefaults', () => {
   it('returns defaults for null/garbage input', () => {
@@ -8,19 +8,22 @@ describe('withDefaults', () => {
     expect(withDefaults('nope')).toEqual(DEFAULT_SETTINGS)
   })
 
-  it('keeps a valid provider and rejects an unknown one', () => {
-    expect(withDefaults({ providerId: 'anthropic' }).providerId).toBe('anthropic')
-    expect(withDefaults({ providerId: 'openai' }).providerId).toBe('ollama')
+  it('keeps the string fields it recognizes and nulls the ones of the wrong type', () => {
+    expect(withDefaults({ evaluatorName: 'Ada' }).evaluatorName).toBe('Ada')
+    expect(withDefaults({ lastDatasetPath: '/tmp/tickets.json' }).lastDatasetPath).toBe('/tmp/tickets.json')
+    expect(withDefaults({ lastDatasetPath: 7 }).lastDatasetPath).toBeNull()
   })
 
-  it('clamps numeric run settings into range', () => {
-    expect(withDefaults({ concurrency: -3 }).concurrency).toBe(LIMITS.concurrency.min)
-    expect(withDefaults({ batchSize: 9999 }).batchSize).toBe(LIMITS.batchSize.max)
-  })
-
-  it('coerces a null anthropic model and preserves a set one', () => {
-    expect(withDefaults({ anthropic: { model: '' } }).anthropic.model).toBeNull()
-    expect(withDefaults({ anthropic: { model: 'claude-x' } }).anthropic.model).toBe('claude-x')
+  it('drops settings an older release wrote (providers, and the file-dialog paths)', () => {
+    const stale = {
+      providerId: 'anthropic',
+      ollama: { host: 'h' },
+      concurrency: 8,
+      defaultDir: '/tmp/evals',
+      lastWorkingPath: '/tmp/x.qval.json',
+      evaluatorName: 'Ada'
+    }
+    expect(withDefaults(stale)).toEqual({ ...DEFAULT_SETTINGS, evaluatorName: 'Ada' })
   })
 
   it('falls back to the default schema when the stored schema is empty/invalid', () => {
@@ -30,10 +33,12 @@ describe('withDefaults', () => {
 })
 
 describe('mergeSettings', () => {
-  it('merges nested objects field-by-field', () => {
-    const merged = mergeSettings(DEFAULT_SETTINGS, { ollama: { model: 'llama3' } as never })
-    expect(merged.ollama.host).toBe(DEFAULT_SETTINGS.ollama.host)
-    expect(merged.ollama.model).toBe('llama3')
+  it('leaves untouched fields alone', () => {
+    const current = { ...DEFAULT_SETTINGS, evaluatorName: 'Ada', lastDatasetPath: '/tmp/tickets.json' }
+    const merged = mergeSettings(current, { rules: 'be kind' })
+    expect(merged.rules).toBe('be kind')
+    expect(merged.evaluatorName).toBe('Ada')
+    expect(merged.lastDatasetPath).toBe('/tmp/tickets.json')
   })
 
   it('replaces the schema wholesale', () => {

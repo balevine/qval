@@ -1,18 +1,19 @@
-import { FolderOpen, RotateCcw } from 'lucide-react'
-import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useSettings } from '@/state/SettingsContext'
+import { useSession } from '@/state/SessionContext'
 
-/** Lets the user choose the default folder and their evaluator display name. */
+/**
+ * Who you are when your scores are saved, plus where they are going.
+ *
+ * The folder picker is gone with the native dialogs: the CLI resolves both files before the browser
+ * exists (spec §19), so the only thing left to choose here is the display name, and the paths are
+ * shown rather than set.
+ */
 export function StorageSettings() {
   const { settings, update } = useSettings()
+  const { session } = useSession()
   if (!settings) return null
-
-  const choose = async () => {
-    const dir = await window.api.dialog.chooseDirectory()
-    if (dir) update({ defaultDir: dir })
-  }
 
   return (
     <div className="space-y-5">
@@ -28,23 +29,15 @@ export function StorageSettings() {
         </p>
       </div>
 
-      <div className="flex items-center gap-2 border-2 border-ink bg-paper px-3 py-2">
-        <FolderOpen className="h-4 w-4 shrink-0 text-ink/60" />
-        <span className="truncate font-mono text-xs text-ink" title={settings.defaultDir ?? ''}>
-          {settings.defaultDir ?? 'App default folder (userData)'}
-        </span>
-      </div>
-      <div className="flex gap-2">
-        <Button size="sm" variant="outline" onClick={choose}>
-          <FolderOpen className="h-3.5 w-3.5" />
-          Choose folder
-        </Button>
-        {settings.defaultDir ? (
-          <Button size="sm" variant="ghost" onClick={() => update({ defaultDir: null })}>
-            <RotateCcw className="h-3.5 w-3.5" />
-            Reset to default
-          </Button>
-        ) : null}
+      <div className="space-y-2">
+        <Label>Working file</Label>
+        <div className="border-2 border-ink bg-paper px-3 py-2">
+          <span className="break-all font-mono text-xs text-ink">{session?.workingPath ?? 'unsaved'}</span>
+        </div>
+        <p className="text-[11px] text-ink/50">
+          Bound by <span className="font-mono">/qval:review</span> when it started. Every edit is written to it
+          as you make it — there is nothing to save.
+        </p>
       </div>
     </div>
   )

@@ -6,7 +6,7 @@ import {
   normalizeSchema,
   propertyErrors,
   toCamelKey
-} from './schema'
+} from '@lib/schema.mjs'
 
 describe('allowsMultiple', () => {
   it('permits enum/score but not boolean/text', () => {

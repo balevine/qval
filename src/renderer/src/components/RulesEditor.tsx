@@ -6,8 +6,8 @@ import { SectionHeader } from '@/components/ui/section-header'
 import { useSettings } from '@/state/SettingsContext'
 import { useSession } from '@/state/SessionContext'
 import { LockNotice } from '@/components/ui/lock-notice'
-import { compilePrompt, SAMPLE_PREVIEW_TICKETS } from '@shared/promptCompiler'
-import { configLocked } from '@shared/evalFile'
+import { compilePrompt, SAMPLE_PREVIEW_TICKETS } from '@lib/promptCompiler.mjs'
+import { configLocked } from '@lib/evalFile.mjs'
 import { cn } from '@/lib/utils'
 
 /**

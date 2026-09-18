@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Settings } from '@shared/types'
 import { createSafeContext } from '@/lib/createSafeContext'
+import { api } from '@/lib/apiClient'
 
 interface SettingsContextValue {
   settings: Settings | null
   loading: boolean
-  /** Persist a partial update; returns the merged settings from main. */
+  /** Persist a partial update; returns the merged settings from the host. */
   update: (partial: Partial<Settings>) => Promise<void>
-  /** Re-pull settings from main (e.g. after opening a file hydrates schema/rules/provider). */
+  /** Re-pull settings from the host (e.g. after opening a file hydrates its schema/rules). */
   refresh: () => Promise<void>
 }
 
@@ -22,7 +23,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let active = true
-    window.api.settings
+    api.settings
       .get()
       .then((s) => {
         if (active) setSettings(s)
@@ -42,14 +43,14 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     // state with a stale value (which would revert/lose characters while typing fast).
     setSettings((prev) => (prev ? { ...prev, ...partial } : prev))
     const seq = ++latestSeq.current
-    const next = await window.api.settings.set(partial)
+    const next = await api.settings.set(partial)
     if (seq === latestSeq.current) setSettings(next)
   }, [])
 
   const refresh = useCallback(async () => {
     // Bump the seq so any in-flight optimistic `update` responses don't clobber the fresh pull.
     const seq = ++latestSeq.current
-    const next = await window.api.settings.get()
+    const next = await api.settings.get()
     if (seq === latestSeq.current) setSettings(next)
   }, [])
 

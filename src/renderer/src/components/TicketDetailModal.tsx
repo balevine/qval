@@ -5,13 +5,13 @@ import { IconButton } from '@/components/ui/icon-button'
 import { HumanEvalForm } from '@/components/HumanEvalForm'
 import { useSession } from '@/state/SessionContext'
 import { useSettings } from '@/state/SettingsContext'
-import { useEvaluation } from '@/state/EvaluationContext'
 import { useToast } from '@/state/ToastContext'
-import { applyHumanValues, ownResults } from '@shared/evalFile'
-import { aggregateSession, buildStreams, streamLabel } from '@shared/aggregate'
+import { applyHumanValues, ownResults } from '@lib/evalFile.mjs'
+import { aggregateSession, buildStreams, streamLabel } from '@lib/aggregate.mjs'
 import { formatComparisonCell } from '@/lib/aggregateFormat'
 import { cn } from '@/lib/utils'
 import { errorMessage, formatEvalValue, formatInt, formatTimestamp } from '@/lib/format'
+import { api } from '@/lib/apiClient'
 import type { ComparisonFile, EvalFile, EvalValues, Ticket } from '@shared/types'
 
 interface TicketDetailModalProps {
@@ -22,14 +22,12 @@ interface TicketDetailModalProps {
 
 /**
  * The conversation + human-eval form for one ticket (spec §7/§9.2). Human edits are applied to the
- * session optimistically and persisted in main; prev/next/next-unevaluated sweep the queue.
+ * session optimistically and persisted host-side; prev/next/next-unevaluated sweep the queue.
  */
 export function TicketDetailModal({ tickets, index, onIndexChange }: TicketDetailModalProps) {
   const { session, applyWorkingFile } = useSession()
   const { settings } = useSettings()
-  const { phase } = useEvaluation()
   const { toast } = useToast()
-  const running = phase === 'running'
 
   const file = session?.workingFile
   const humanById = useMemo(
@@ -59,7 +57,7 @@ export function TicketDetailModal({ tickets, index, onIndexChange }: TicketDetai
   const onChange = (values: EvalValues) => {
     const name = settings?.evaluatorName || 'Me'
     applyWorkingFile(applyHumanValues(file, { name, ticketId: ticket.id, values, now: new Date().toISOString() }))
-    window.api.human.setValues(ticket.id, values).catch((e) => toast(errorMessage(e, 'Could not save'), 'error'))
+    api.human.setValues(ticket.id, values).catch((e) => toast(errorMessage(e, 'Could not save'), 'error'))
   }
 
   const go = (i: number) => onIndexChange(Math.min(tickets.length - 1, Math.max(0, i)))
@@ -141,17 +139,11 @@ export function TicketDetailModal({ tickets, index, onIndexChange }: TicketDetai
                 LLM eval failed for this ticket: {llmResult.error}
               </div>
             ) : null}
-            {running ? (
-              <div className="mb-3 border-l-[6px] border-ink bg-ink/5 px-3 py-2 font-mono text-[11px] uppercase tracking-widest text-ink/70">
-                Evaluation running — scoring is paused until it finishes.
-              </div>
-            ) : null}
             <HumanEvalForm
               schema={file.meta.config.schema}
               values={humanValues}
               llmValues={llmResult?.values ?? null}
               llmIssues={llmResult?.issues ?? null}
-              disabled={running}
               onChange={onChange}
             />
           </div>

@@ -1,0 +1,4 @@
+# The single-file UI bundle is a build artifact we commit so the plugin installs with no build step
+# (see vite.config.mts). It is one 400 KB minified line, so keep it out of diffs and out of the
+# language stats. `npm run check:ui` is what actually verifies it against the sources.
+plugin/ui/index.html -diff linguist-generated

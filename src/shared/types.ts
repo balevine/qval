@@ -1,29 +1,10 @@
 /**
- * Shared types used across the main, preload, and renderer processes.
+ * Shared types used by the renderer, the main process, and the review server.
  *
- * This file is the single source of truth for the IPC contract and the persisted data model.
+ * This file is the single source of truth for the host contract and the persisted data model.
  * See `.plans/PROJECT_SPEC.md` for the full design. Phases add to it incrementally; the ticket /
  * eval-file / aggregate types arrive with their phases.
  */
-
-// --- Providers ---------------------------------------------------------------
-
-/**
- * Supported LLM providers. Ollama is local; Anthropic is hosted (needs an API key).
- * (OpenAI and Gemini are intentionally out of scope for now — see the spec.)
- */
-export type ProviderId = 'ollama' | 'anthropic'
-
-export const ALL_PROVIDERS: ProviderId[] = ['ollama', 'anthropic']
-export const HOSTED_PROVIDERS: ProviderId[] = ['anthropic']
-export const PROVIDER_LABELS: Record<ProviderId, string> = {
-  ollama: 'Ollama (local)',
-  anthropic: 'Anthropic'
-}
-
-export function isHostedProvider(id: ProviderId): boolean {
-  return HOSTED_PROVIDERS.includes(id)
-}
 
 // --- Eval schema (the user-defined output properties, spec §2.2) -------------
 
@@ -121,6 +102,8 @@ export interface Evaluator {
   kind: EvaluatorKind
   /** Display label (the human name comes from the run config). */
   name: string
+  /** What produced an `llm` evaluator. `'claude-code'` for anything Qval writes now; a file from
+   *  an older release may carry `'ollama'`/`'anthropic'`, which still reads and merges. */
   provider?: string
   model?: string
   results: EvalResult[]
@@ -157,11 +140,22 @@ export interface EvalFile {
 
 /** A read-only comparison eval file added via MERGE (its evaluators are pooled into aggregates). */
 export interface ComparisonFile {
-  /** Stable id (its file path). */
+  /** Stable id. Opaque to the UI: the host maps it back to a file (spec §19). */
   id: string
   /** Display label (filename). */
   name: string
   evaluators: Evaluator[]
+}
+
+/**
+ * A file the host found and is willing to merge, offered to the UI by name only. The path stays
+ * host-side, which is what lets MERGE work in a browser without any endpoint accepting one (§19).
+ */
+export interface ComparisonCandidate {
+  id: string
+  name: string
+  /** Whether it is currently merged into the session. */
+  merged: boolean
 }
 
 /** The in-memory working session: the loaded dataset + the editable working file + merged files. */
@@ -172,6 +166,8 @@ export interface SessionSnapshot {
   workingPath: string | null
   /** Read-only files added via MERGE, pooled into the aggregates/comparison (spec §8). */
   comparisons: ComparisonFile[]
+  /** Mergeable files the host located, merged or not. Empty when the host offers none. */
+  candidates: ComparisonCandidate[]
 }
 
 // --- Aggregates & comparison (derived at merge time — spec §2.6) --------------
@@ -211,102 +207,37 @@ export interface AggregateResult {
   rollup: Record<string, PropertyRollup>
 }
 
-// --- Evaluation run (spec §6) ------------------------------------------------
+// --- Settings (persisted) ----------------------------------------------------
 
-/** Which tickets an LLM run targets. */
-export type RunMode =
-  | { kind: 'all' }
-  | { kind: 'remaining' } // unevaluated, errored, or with unresolved dropped values
-  | { kind: 'selection'; ticketIds: number[] }
-
-/** Pre-run token/cost estimate (dollars only when the model's price is known — spec §5). */
-export interface CostEstimate {
-  provider: ProviderId
-  model: string
-  targetCount: number
-  batches: number
-  estimatedInputTokens: number
-  estimatedOutputTokens: number
-  estimatedTotalTokens: number
-  /** USD, or null when the model's price isn't in the pricing map. */
-  estimatedCostUsd: number | null
-  priceKnown: boolean
-  currency: 'USD'
-  isLocal: boolean
-}
-
-/** Live progress streamed from main during a run. */
-export interface EvaluationProgress {
-  ticketsDone: number
-  ticketsTotal: number
-  batchesDone: number
-  batchesTotal: number
-  retries: number
-  failed: number
-  streamingTokens: number
-  fraction: number
-}
-
-/** Final result of an LLM run — the updated working file + a stats summary. */
-export interface EvalRunResult {
-  workingFile: EvalFile
-  cancelled: boolean
-  stats: { evaluated: number; failed: number; retries: number }
-}
-
-// --- Settings (persisted, non-secret) ----------------------------------------
-
-export interface OllamaConfig {
-  host: string
-  model: string
-}
-
-/** Anthropic config. Unlike Qbort, the user picks the model (fetched live). `null` until chosen. */
-export interface AnthropicConfig {
-  model: string | null
-}
-
-/** The full persisted settings document (no secrets — those live in the keychain). */
+/**
+ * The full persisted settings document. There are no secrets in it and no provider config either:
+ * the LLM evaluation runs inside Claude Code with the ambient model (spec §5/§18), so there is no
+ * key to store and no model to pick here.
+ */
 export interface Settings {
-  providerId: ProviderId
-  ollama: OllamaConfig
-  anthropic: AnthropicConfig
   /** Display name stamped on the human evaluator (spec §2.4). */
   evaluatorName: string
   /** Working output schema; snapshotted into each eval file. */
   schema: EvalSchema
   /** Working free-form rules; snapshotted into each eval file. */
   rules: Rules
-  /** Eval parallelism (concurrent batches). */
-  concurrency: number
-  /** Tickets per LLM call (adaptive at run time). */
-  batchSize: number
-  /** Folder where eval files are saved / opened. `null` → app default (userData). */
-  defaultDir: string | null
-  /** Path of the most recently written/loaded eval file. */
-  lastWorkingPath: string | null
-  /** Path of the tickets file backing the last working file (convenience pointer for silent
-   *  re-open; not part of any eval file — the eval file references the dataset by fingerprint). */
+  /** Path of the tickets file backing the working file. It is how an eval file relinks its dataset
+   *  without being handed one, and it is not part of any eval file (which references the dataset by
+   *  fingerprint). There is no `defaultDir` and no last-file pointer: the host binds every path from
+   *  argv before the browser exists (spec §19), so there is nothing for settings to remember. */
   lastDatasetPath: string | null
-}
-
-// --- Secrets & connectivity --------------------------------------------------
-
-/** Whether an API key is stored for each hosted provider. */
-export type SecretStatus = Record<string, boolean>
-
-/** Result of a provider "test connection" probe. */
-export interface ConnectionTestResult {
-  ok: boolean
-  message: string
 }
 
 // --- IPC contract ------------------------------------------------------------
 
 /**
- * The surface exposed on `window.api` by the preload script. Every method maps to a single,
- * explicitly allow-listed IPC channel handled in the main process. Keys are decrypted in main
- * only and never returned to the renderer (it learns only "is a key set").
+ * The one surface the UI reaches its host through, named for the IPC bridge it started as.
+ * `renderer/lib/apiClient.ts` implements it over `fetch` against the review server, which is the
+ * only host there is now that the Electron shell is gone.
+ *
+ * **Nothing here takes or returns a path the UI chose.** The host resolves every file before the
+ * browser exists, so opening, merging, and exporting are all named by id or by nothing at all
+ * (spec §19). That is why there is no `open` and no directory picker.
  */
 export interface IpcApi {
   app: {
@@ -316,76 +247,24 @@ export interface IpcApi {
     get: () => Promise<Settings>
     set: (partial: Partial<Settings>) => Promise<Settings>
   }
-  secrets: {
-    setKey: (provider: ProviderId, key: string) => Promise<boolean>
-    hasKey: (provider: ProviderId) => Promise<boolean>
-    clearKey: (provider: ProviderId) => Promise<boolean>
-    status: () => Promise<SecretStatus>
-  }
-  provider: {
-    testConnection: (provider: ProviderId) => Promise<ConnectionTestResult>
-  }
-  ollama: {
-    listModels: (host: string) => Promise<string[]>
-  }
-  anthropic: {
-    /** Fetch the account's available models from `/v1/models` (main reads the stored key). */
-    listModels: () => Promise<string[]>
-  }
   session: {
-    /** Open dialog that auto-detects a Qbort tickets.json (→ fresh working file, discarding the
-     *  current one) or a *.qval.json (→ load working file, relinking its dataset). This is also how
-     *  you start over under new criteria: re-open the tickets.json. Returns null if cancelled. */
-    open: () => Promise<SessionSnapshot | null>
-    /** Silently reload the last working file + its dataset on launch, if both are available. */
+    /** Load the session the host bound at launch. Null when it bound nothing. */
     loadLast: () => Promise<SessionSnapshot | null>
-    /** Write the working file (Save-As dialog if it has no path yet). Returns the path or null. */
+    /** The path the working file is bound to. The host persists on every mutation. */
     save: () => Promise<string | null>
-    /** Pick a *.qval.json to MERGE as a comparison; throws with a reason on a fingerprint mismatch. */
-    addComparison: () => Promise<SessionSnapshot | null>
-    /** Remove a merged comparison by id; returns the updated session. */
-    removeComparison: (id: string) => Promise<SessionSnapshot | null>
-    /** Write a flat merged aggregate report to a chosen path. Returns the path or null. */
+    /** MERGE a candidate by id; throws with a reason on a fingerprint mismatch (spec §8). */
+    mergeComparison: (id: string) => Promise<SessionSnapshot | null>
+    /** Un-merge a comparison by id; returns the updated session. */
+    unmergeComparison: (id: string) => Promise<SessionSnapshot | null>
+    /** Write the flat merged aggregate report beside the working file. Returns its path. */
     exportReport: () => Promise<string | null>
   }
-  evaluation: {
-    estimate: (mode: RunMode) => Promise<CostEstimate>
-    start: (mode: RunMode) => Promise<EvalRunResult>
-    cancel: () => Promise<void>
-    /** Subscribe to live progress; returns an unsubscribe function. */
-    onProgress: (cb: (progress: EvaluationProgress) => void) => () => void
-  }
   human: {
-    /** Upsert this ticket's human values into the working file (main persists atomically). */
+    /** Upsert this ticket's human values into the working file (the host persists atomically). */
     setValues: (ticketId: number, values: EvalValues) => Promise<void>
   }
-  dialog: {
-    chooseDirectory: () => Promise<string | null>
+  review: {
+    /** End the review session: the host stops serving and records the run as finished (spec §19). */
+    done: () => Promise<void>
   }
 }
-
-/** Channel name constants — keeps preload and main in sync without magic strings. */
-export const IpcChannels = {
-  appGetVersion: 'app:getVersion',
-  settingsGet: 'settings:get',
-  settingsSet: 'settings:set',
-  secretsSetKey: 'secrets:setKey',
-  secretsHasKey: 'secrets:hasKey',
-  secretsClearKey: 'secrets:clearKey',
-  secretsStatus: 'secrets:status',
-  providerTestConnection: 'provider:testConnection',
-  ollamaListModels: 'ollama:listModels',
-  anthropicListModels: 'anthropic:listModels',
-  sessionOpen: 'session:open',
-  sessionLoadLast: 'session:loadLast',
-  sessionSave: 'session:save',
-  sessionAddComparison: 'session:addComparison',
-  sessionRemoveComparison: 'session:removeComparison',
-  sessionExportReport: 'session:exportReport',
-  evaluationEstimate: 'evaluation:estimate',
-  evaluationStart: 'evaluation:start',
-  evaluationCancel: 'evaluation:cancel',
-  evaluationProgress: 'evaluation:progress',
-  humanSetValues: 'human:setValues',
-  dialogChooseDirectory: 'dialog:chooseDirectory'
-} as const

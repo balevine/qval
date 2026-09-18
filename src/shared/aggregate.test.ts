@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { aggregateProperty, aggregateSession, buildStreams, compareStreams, jaccard } from './aggregate'
-import { applyHumanValues, applyLlmResults, createWorkingFile } from './evalFile'
+import { aggregateProperty, aggregateSession, buildStreams, compareStreams, jaccard } from '@lib/aggregate.mjs'
+import { applyHumanValues, applyLlmResults, createWorkingFile } from '@lib/evalFile.mjs'
 import type { ComparisonFile, EvalProperty, PropertyAggregate } from './types'
 
 const score: EvalProperty = { key: 'empathy', label: 'E', type: 'score', min: 1, max: 5, step: 1 }

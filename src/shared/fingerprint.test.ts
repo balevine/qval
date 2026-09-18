@@ -5,7 +5,7 @@ import {
   configFingerprint,
   datasetFingerprint,
   sha256Hex
-} from './fingerprint'
+} from '@lib/fingerprint.mjs'
 import type { EvalSchema, Ticket } from './types'
 
 const ticket = (over: Partial<Ticket> = {}): Ticket => ({

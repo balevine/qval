@@ -15,8 +15,8 @@ import {
 import { useSettings } from '@/state/SettingsContext'
 import { useSession } from '@/state/SessionContext'
 import { LockNotice } from '@/components/ui/lock-notice'
-import { allowsMultiple, blankProperty, propertyErrors, toCamelKey } from '@shared/schema'
-import { configLocked } from '@shared/evalFile'
+import { allowsMultiple, blankProperty, propertyErrors, toCamelKey } from '@lib/schema.mjs'
+import { configLocked } from '@lib/evalFile.mjs'
 import { cn } from '@/lib/utils'
 import type { EvalProperty, PropertyType } from '@shared/types'
 
