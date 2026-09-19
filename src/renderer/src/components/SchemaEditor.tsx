@@ -128,8 +128,9 @@ export function SchemaEditor() {
       {locked ? (
         <LockNotice>
           Schema is locked — this file already has evaluations, so its scoring criteria are frozen to keep every
-          score comparable. <span className="font-bold text-ink">Open</span> its tickets.json to start a fresh
-          evaluation with a different schema.
+          score comparable. Scoring the same tickets under a different schema means a new eval file: run{' '}
+          <span className="font-mono">/qval:evaluate-tickets</span> with{' '}
+          <span className="font-mono">--eval-file &lt;new path&gt;</span>.
         </LockNotice>
       ) : null}
       <fieldset disabled={locked} className={cn('m-0 space-y-3 border-0 p-0', locked && 'opacity-60')}>

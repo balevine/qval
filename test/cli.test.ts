@@ -94,6 +94,9 @@ async function qbortHome(name: string, stamps: string[]) {
   return path
 }
 
+/** Where a generated eval file or report lands now: `qval-output/` under the working directory. */
+const outPath = (cwd: string, name: string) => join(cwd, 'qval-output', name)
+
 function qval(cwd: string, args: string[], env: Record<string, string> = {}) {
   homes.push(cwd)
   const res = spawnSync(process.execPath, [CLI, ...args], {
@@ -131,13 +134,13 @@ async function post(url: string, path: string, body: unknown = {}) {
 // --- Resolving what to open --------------------------------------------------
 
 describe('serve: what it opens', () => {
-  it('finds the only tickets.json, creates the eval file in the working dir, and serves detached', async () => {
+  it('finds the only tickets.json, creates the eval file in qval-output/, and serves detached', async () => {
     const cwd = await home('one')
     const res = qval(cwd, ['serve', '--no-open'])
 
     expect(res.status).toBe(0)
     expect(res.out.split('\n')[0]).toBe('SERVING')
-    expect(field(res.out, 'WORKING_FILE')).toBe(join(cwd, 'tickets.qval.json'))
+    expect(field(res.out, 'WORKING_FILE')).toBe(outPath(cwd, 'tickets.qval.json'))
     expect(field(res.out, 'DATASET')).toBe(join(cwd, 'tickets.json'))
     expect(field(res.out, 'CANDIDATES')).toBe('0')
     expect(field(res.out, 'OPENED')).toBe('no')
@@ -146,7 +149,7 @@ describe('serve: what it opens', () => {
     const record = (await readRecord(cwd))!
     expect(record.status).toBe('live')
     expect(record.pid).not.toBe(process.pid)
-    expect((await readJson(join(cwd, 'tickets.qval.json')))).not.toBeNull()
+    expect(await readJson(outPath(cwd, 'tickets.qval.json'))).not.toBeNull()
 
     const res2 = await fetch(field(res.out, 'URL')!)
     expect(res2.status).toBe(200)
@@ -158,9 +161,9 @@ describe('serve: what it opens', () => {
     const first = (await readRecord(cwd))!
     await post(first.url!, '/api/done')
 
-    // Second run, no argument: the *.qval.json now in the directory is the thing to open.
+    // Second run, no argument: the *.qval.json now in qval-output/ is the thing to open.
     const res = qval(cwd, ['serve', '--no-open'])
-    expect(field(res.out, 'WORKING_FILE')).toBe(join(cwd, 'tickets.qval.json'))
+    expect(field(res.out, 'WORKING_FILE')).toBe(outPath(cwd, 'tickets.qval.json'))
     // Resumed from the eval file, whose dataset is the tickets.json sitting next to it.
     expect(field(res.out, 'DATASET')).toBe(join(cwd, 'tickets.json'))
   })
@@ -174,7 +177,8 @@ describe('serve: what it opens', () => {
     await post((await readRecord(source))!.url!, '/api/done')
 
     const cwd = await home('elsewhere')
-    writeFileSync(join(cwd, 'tickets.qval.json'), readFileSync(join(source, 'tickets.qval.json')))
+    await fs.mkdir(join(cwd, 'qval-output'), { recursive: true })
+    writeFileSync(outPath(cwd, 'tickets.qval.json'), readFileSync(outPath(source, 'tickets.qval.json')))
     const res = qval(cwd, ['serve', '--no-open'])
 
     expect(res.out.split('\n')[0]).toBe('SERVING')
@@ -183,8 +187,26 @@ describe('serve: what it opens', () => {
     expect((await readRecord(cwd))!.status).toBe('live')
   })
 
+  it('resumes an eval file left loose in the working directory by an older version', async () => {
+    // Every version before qval-output/ existed wrote the eval file here. Starting a second, empty
+    // evaluation beside a full one would look like losing every score, so the old location still
+    // counts — both for what `serve` opens and for what it offers to merge.
+    const source = await home('legacy-source')
+    qval(source, ['serve', '--no-open'])
+    await post((await readRecord(source))!.url!, '/api/done')
+
+    const cwd = await home('legacy')
+    writeFileSync(join(cwd, 'tickets.qval.json'), readFileSync(outPath(source, 'tickets.qval.json')))
+    const res = qval(cwd, ['serve', '--no-open'])
+
+    expect(res.out.split('\n')[0]).toBe('SERVING')
+    expect(field(res.out, 'WORKING_FILE')).toBe(join(cwd, 'tickets.qval.json'))
+    // And it stays where it is: reviewing an old file must not silently relocate it.
+    expect(await readJson(outPath(cwd, 'tickets.qval.json'))).toBeNull()
+  })
+
   it('offers the other eval files in the directory as merge candidates', async () => {
-    const cwd = await home('candidates', { 'alice.qval.json': { not: 'validated yet' } })
+    const cwd = await home('candidates', { 'qval-output/alice.qval.json': { not: 'validated yet' } })
     qval(cwd, ['serve', 'tickets.json', '--no-open'])
 
     const record = (await readRecord(cwd))!
@@ -192,7 +214,7 @@ describe('serve: what it opens', () => {
   })
 
   it('refuses an ambiguous directory with the list, instead of guessing', async () => {
-    const cwd = await home('ambiguous', { 'a.qval.json': {}, 'b.qval.json': {} })
+    const cwd = await home('ambiguous', { 'qval-output/a.qval.json': {}, 'qval-output/b.qval.json': {} })
     const res = qval(cwd, ['serve', '--no-open'])
 
     expect(res.status).toBe(2)
@@ -213,7 +235,7 @@ describe('serve: what it opens', () => {
     const res = qval(cwd, ['serve', '--no-open'])
     expect(res.out.split('\n')[0]).toBe('SERVING')
     expect(field(res.out, 'DATASET')).toBe(join(cwd, 'zendesk-export-q3.json'))
-    expect(field(res.out, 'WORKING_FILE')).toBe(join(cwd, 'zendesk-export-q3.qval.json'))
+    expect(field(res.out, 'WORKING_FILE')).toBe(outPath(cwd, 'zendesk-export-q3.qval.json'))
   })
 
   it('points at an explicit path when the directory holds no dataset at all', async () => {
@@ -231,11 +253,11 @@ describe('serve: what it opens', () => {
     const res2 = qval(cwd, ['serve', join(elsewhere, 'tickets.json'), '--no-open'])
     expect(res2.out.split('\n')[0]).toBe('SERVING')
     expect(field(res2.out, 'DATASET')).toBe(join(elsewhere, 'tickets.json'))
-    // The eval file still lands in the working directory, not next to the far-away dataset.
-    expect(field(res2.out, 'WORKING_FILE')).toBe(join(cwd, 'tickets.qval.json'))
+    // The eval file still lands under the working directory, not next to the far-away dataset.
+    expect(field(res2.out, 'WORKING_FILE')).toBe(outPath(cwd, 'tickets.qval.json'))
   })
 
-  it('finds the dataset Qbort left in qbort-output/, and keeps the eval file in the working dir', async () => {
+  it('finds the dataset Qbort left in qbort-output/, and keeps the eval file under the working dir', async () => {
     // Qbort stopped writing a tickets.json beside the working directory: every run lands in
     // `qbort-output/` under a timestamped name. Scanning only the working directory finds nothing.
     const cwd = await qbortHome('qbort-one', ['20260918-221724'])
@@ -243,9 +265,9 @@ describe('serve: what it opens', () => {
 
     expect(res.out.split('\n')[0]).toBe('SERVING')
     expect(field(res.out, 'DATASET')).toBe(join(cwd, 'qbort-output', 'tickets-20260918-221724.json'))
-    // Not beside the dataset: the engine writes its eval file in the working directory too, and the
-    // merge-candidate scan only looks there.
-    expect(field(res.out, 'WORKING_FILE')).toBe(join(cwd, 'tickets-20260918-221724.qval.json'))
+    // Not beside the dataset: the engine writes its eval file into the working directory's
+    // qval-output/ too, and that is where the merge-candidate scan looks.
+    expect(field(res.out, 'WORKING_FILE')).toBe(outPath(cwd, 'tickets-20260918-221724.qval.json'))
   })
 
   it('lists several Qbort runs rather than guessing which one to start on', async () => {
@@ -271,9 +293,10 @@ describe('serve: what it opens', () => {
     await post((await readRecord(source))!.url!, '/api/done')
 
     const cwd = await qbortHome('qbort-resume', ['20260918-152126', '20260918-221724'])
+    await fs.mkdir(join(cwd, 'qval-output'), { recursive: true })
     writeFileSync(
-      join(cwd, 'tickets-20260918-152126.qval.json'),
-      readFileSync(join(source, 'tickets-20260918-152126.qval.json'))
+      outPath(cwd, 'tickets-20260918-152126.qval.json'),
+      readFileSync(outPath(source, 'tickets-20260918-152126.qval.json'))
     )
     const res = qval(cwd, ['serve', '--no-open'])
 
@@ -353,7 +376,7 @@ describe('status', () => {
     const done = qval(cwd, ['status'])
     expect(done.out.split('\n')[0]).toBe('REVIEW done')
     expect(done.out).toMatch(/HUMAN scored 1\/2/)
-    expect(field(done.out, 'FILE')).toBe(join(cwd, 'tickets.qval.json'))
+    expect(field(done.out, 'FILE')).toBe(outPath(cwd, 'tickets.qval.json'))
     // The URL carried the session token, and the session is over.
     expect((await readRecord(cwd))!.url).toBeNull()
   })
@@ -403,6 +426,30 @@ describe('shared config with the engine', () => {
 
     expect(await fs.readFile(join(cwd, 'EVAL_RULES.md'), 'utf8')).toBe('Judge the tone, generously.\n')
     expect(await readJson(join(cwd, 'EVAL_SCHEMA.json'))).toMatchObject([{ key: 'tone' }])
+    expect(qval(cwd, ['status']).out).toContain('CONFIG_WRITTEN')
+  })
+
+  it('leaves the config files alone when the session did not change them', async () => {
+    // They are the user's files, often hand-written. A session that only reads must not rewrite
+    // them — not even into an equivalent-but-reformatted shape.
+    const schema = [{ key: 'tone', label: 'Tone', type: 'enum', options: ['warm', 'curt'] }]
+    const cwd = await home('config-untouched', { 'EVAL_SCHEMA.json': schema, 'EVAL_RULES.md': 'Judge the tone.\n' })
+    const before = {
+      schema: await fs.readFile(join(cwd, 'EVAL_SCHEMA.json'), 'utf8'),
+      rules: await fs.readFile(join(cwd, 'EVAL_RULES.md'), 'utf8')
+    }
+
+    const url = field(qval(cwd, ['serve', '--no-open']).out, 'URL')!
+    // A human score, so the session did real work — just not to the config.
+    await post(url, '/api/result', { ticketId: 1, values: { tone: 'warm' } })
+    await post(url, '/api/done')
+    for (let i = 0; i < 50 && (await readRecord(cwd))?.status === 'live'; i++) {
+      await new Promise((r) => setTimeout(r, 50))
+    }
+
+    expect(await fs.readFile(join(cwd, 'EVAL_SCHEMA.json'), 'utf8')).toBe(before.schema)
+    expect(await fs.readFile(join(cwd, 'EVAL_RULES.md'), 'utf8')).toBe(before.rules)
+    expect(qval(cwd, ['status']).out).not.toContain('CONFIG_WRITTEN')
   })
 })
 

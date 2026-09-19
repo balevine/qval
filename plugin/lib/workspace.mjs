@@ -2,7 +2,7 @@
 // it. Every path arrives as an explicit argument, so this carries no dependency on how the host
 // asks (native dialog, CLI argument, cwd scan).
 
-import { basename, dirname, extname, join } from 'node:path'
+import { basename } from 'node:path'
 import { parseTicketsFile } from './tickets.mjs'
 import { applyHumanValues, configLocked, createWorkingFile, looksLikeEvalFile, normalizeEvalFile } from './evalFile.mjs'
 import { aggregateSession } from './aggregate.mjs'
@@ -35,28 +35,6 @@ import { atomicWriteJson, readJson } from './fsUtil.mjs'
  * and the `name`, which is what keeps paths off the wire.
  * @typedef {{ id: string, name: string, path: string }} ComparisonSource
  */
-
-/**
- * Where `exportReport` writes, derived from the working file rather than chosen: `tickets.qval.json`
- * → `tickets.report.json`, alongside it. The browser names no destination.
- * @param {string} workingPath
- * @returns {string}
- */
-export function reportPathFor(workingPath) {
-  const stem = basename(workingPath, extname(workingPath)).replace(/\.qval$/, '')
-  return join(dirname(workingPath), `${stem}.report.json`)
-}
-
-/**
- * Suggest a `<dataset>.qval.json` filename from the backing tickets path.
- * @param {string | null} datasetPath
- * @returns {string}
- */
-export function suggestEvalName(datasetPath) {
-  if (!datasetPath) return 'evaluation.qval.json'
-  const stem = basename(datasetPath, extname(datasetPath)).replace(/\.qval$/, '')
-  return `${stem}.qval.json`
-}
 
 /**
  * Owns the in-memory working session (dataset tickets + working eval file + its path) and all file
@@ -164,9 +142,13 @@ export class Workspace {
    * While the working file is **unlocked** (no scored values yet), keep its config snapshot in sync
    * with the current working schema/rules so the file's fingerprint stays honest as the user sets up
    * the schema. Once a score locks the file, its config is frozen and this is a no-op.
+   *
+   * Every write to the working file goes through here first, so this is also where the in-memory
+   * copy is reconciled with the one on disk (see `adoptExternalWrite`).
    * @returns {Promise<void>}
    */
   async ensureConfigStamped() {
+    await this.adoptExternalWrite()
     if (!this.workingFile || configLocked(this.workingFile)) return
     const s = await this.settings.get()
     const fingerprint = await configFingerprint(s.schema, s.rules)
@@ -190,6 +172,36 @@ export class Workspace {
   }
 
   /**
+   * Reconcile the in-memory working file with the one on disk before writing over it.
+   *
+   * A review session keeps the eval file in memory for as long as the browser tab is open, which
+   * can be hours, and `/qval:evaluate-tickets` writes to that same file. Without this check, the
+   * next score someone entered by hand would save our hours-old copy over the top, wiping out
+   * everything the evaluation had just written.
+   *
+   * Taking the file from disk wholesale is safe because every score entered by hand is saved as it
+   * is made. So the copy on disk is already ours, plus whatever the evaluation added.
+   *
+   * If the file on disk turns out to be a different dataset or a different schema, it is not our
+   * evaluation any more and saving over it would cause the very problem this is here to prevent,
+   * so that case throws instead. Qval's own commands cannot produce it: the evaluation engine
+   * checks both of those and stops before writing.
+   * @returns {Promise<void>}
+   */
+  async adoptExternalWrite() {
+    if (!this.workingFile || !this.workingPath) return
+    const onDisk = normalizeEvalFile(await readJson(this.workingPath))
+    if (!onDisk || onDisk.meta.updatedAt === this.workingFile.meta.updatedAt) return
+    if (
+      onDisk.meta.dataset.fingerprint !== this.workingFile.meta.dataset.fingerprint ||
+      onDisk.meta.config.fingerprint !== this.workingFile.meta.config.fingerprint
+    ) {
+      throw new Error('This file was replaced by a different evaluation while you were working. Nothing was saved.')
+    }
+    this.workingFile = onDisk
+  }
+
+  /**
    * Upsert a ticket's human values into the working file and persist. **Serialized** so rapid
    * edits apply in call order without clobbering each other.
    * @param {{ name: string, ticketId: number, values: EvalValues }} args
@@ -198,7 +210,8 @@ export class Workspace {
   async applyHumanEdit(args) {
     const run = async () => {
       if (!this.workingFile) return
-      // Pin the file's config to the schema being scored against before the first value locks it.
+      // Two jobs: record the schema being scored against, while the file is still new enough to
+      // allow that, and pick up anything the evaluation wrote since our last save.
       await this.ensureConfigStamped()
       const next = applyHumanValues(this.workingFile, { ...args, now: this.now() })
       await this.commitWorkingFile(next)
@@ -376,6 +389,8 @@ export class Workspace {
    */
   async exportReport(path) {
     if (!this.workingFile) return null
+    // Pick up any scores the evaluation added, or the report would be missing them.
+    await this.adoptExternalWrite()
 
     const ids = this.tickets.map((t) => t.id)
     const { byTicket, rollup } = aggregateSession(this.workingFile, this.comparisons, ids)

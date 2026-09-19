@@ -202,7 +202,8 @@ export function looksLikeEvalFile(raw) {
 // --- Config lock -------------------------------------------------------------
 // A file's config (schema + rules) and the model that produced it are frozen once real scores
 // exist, so the file's snapshot/fingerprint can never disagree with how its data was produced.
-// The escape hatch is re-opening the tickets.json, which starts a fresh (unlocked) working file.
+// The escape hatch is a *new* eval file over the same tickets, which is what
+// `evaluate-tickets --eval-file <new path>` is for. There is no unlocking in place.
 
 /**
  * Schema + rules are frozen once ANY evaluator (llm or human) has scored a ticket. The criteria

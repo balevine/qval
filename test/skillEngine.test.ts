@@ -15,7 +15,7 @@
 
 import { describe, it, expect, afterAll } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative, resolve } from 'node:path'
 
@@ -30,7 +30,8 @@ import type { EvalFile, EvalResult, Ticket } from '@shared/types'
 
 const ENGINE = resolve(__dirname, '../plugin/skills/evaluate-tickets/engine.mjs')
 const OUT_DIR = '.qval-run'
-const EVAL_FILE = 'tickets.qval.json'
+/** Generated artifacts go under `qval-output/` now, not loose in the working directory. */
+const EVAL_FILE = join('qval-output', 'tickets.qval.json')
 const MODEL = 'Opus 5'
 
 const TICKETS: Ticket[] = [
@@ -505,6 +506,38 @@ describe('re-runs and the human evaluator', () => {
     // Every other LLM result is left exactly as the first run wrote it.
     for (const id of [1, 2, 4]) expect(resultFor(file, id)!.values).toEqual(GOOD)
   })
+
+  it("never reads a previous run's batch output as this run's answer", () => {
+    // Batch files are named by round and index, so a shorter run reuses a longer one's names. If
+    // `plan` left them there, a subagent that wrote nothing would be indistinguishable from one
+    // that returned the previous run's values — silently, re-stamped, and counted as EVALUATED.
+    const dir = makeDir()
+    plan(dir, ['--batch-size', '1']) // four tickets, four batches: batch-0-0 .. batch-0-3
+    respond(dir, 0, (ids) => answer(ids))
+    assemble(dir)
+
+    // The review half keeps its state in the same directory, and it has to survive a re-plan.
+    const sessionFile = join(dir, OUT_DIR, 'review-session.json')
+    writeFileSync(sessionFile, JSON.stringify({ app: 'qval-review', status: 'done', pid: 1 }))
+    writeFileSync(join(dir, OUT_DIR, 'settings.json'), JSON.stringify({ evaluatorName: 'Brian' }))
+
+    plan(dir, ['--batch-size', '1', '--mode', 'selection', '--ids', '1']) // one batch: batch-0-0
+    const left = readdirSync(join(dir, OUT_DIR)).sort()
+    expect(left.filter((n) => n.startsWith('batch-'))).toEqual([])
+    expect(left).toContain('review-session.json')
+    expect(left).toContain('settings.json')
+
+    // Nothing stands in for the subagent this time.
+    const run = assemble(dir)
+    expect(run.out).toContain('EVALUATED 0')
+    expect(run.out).toContain('FAILED 1')
+
+    const result = resultFor(readEval(dir), 1)!
+    expect(result.values).toEqual({})
+    expect(result.error).toBeTruthy()
+    // The tickets this run did not target keep the first run's values, as ever.
+    for (const id of [2, 3, 4]) expect(resultFor(readEval(dir), id)!.values).toEqual(GOOD)
+  })
 })
 
 // --- refusals ----------------------------------------------------------------
@@ -620,6 +653,46 @@ describe('refusals', () => {
     expect(run.err).toContain('changed on disk')
     // Refusing means refusing to write: the file is exactly as the app left it.
     expect(readRaw(dir)).toEqual(raw)
+  })
+
+  it('refuses to plan or assemble while a review session holds the same eval file', () => {
+    const dir = makeDir()
+    const record = (over: Record<string, unknown> = {}) => {
+      mkdirSync(join(dir, OUT_DIR), { recursive: true })
+      writeFileSync(
+        join(dir, OUT_DIR, 'review-session.json'),
+        JSON.stringify({
+          app: 'qval-review',
+          status: 'live',
+          // Our own pid: alive by definition, without spawning anything to hold one open.
+          pid: process.pid,
+          url: 'http://127.0.0.1:1234/?t=x',
+          workingPath: join(dir, EVAL_FILE),
+          ...over
+        })
+      )
+    }
+
+    record()
+    const refused = plan(dir)
+    expect(refused.code).toBe(2)
+    expect(refused.errToken).toBe('SESSION_LIVE')
+    expect(refused.err).toContain('FINISH')
+    // Refusing means writing nothing at all: no eval file, no run context.
+    expect(readdirSync(dir).includes('qval-output')).toBe(false)
+
+    // A session that ended, one whose process is gone, and one on a different file are all fine.
+    record({ status: 'done' })
+    expect(plan(dir).outToken).toBe('PLANNED')
+    record({ pid: 2 ** 30 })
+    expect(plan(dir).outToken).toBe('PLANNED')
+    record({ workingPath: join(dir, 'other.qval.json') })
+    expect(plan(dir).outToken).toBe('PLANNED')
+
+    // And the guard covers `assemble` too, since that is the command that writes.
+    respond(dir, 0, (ids) => answer(ids))
+    record()
+    expect(assemble(dir)).toMatchObject({ code: 2, errToken: 'SESSION_LIVE' })
   })
 
   it('rejects malformed flags with exit 1 and unusable state with exit 2', () => {

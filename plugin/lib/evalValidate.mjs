@@ -87,13 +87,21 @@ function actionFor(p, original, value) {
  */
 function validateProperty(raw, p) {
   if (p.multiple) {
-    const arr = Array.isArray(raw) ? raw : raw === undefined || raw === null ? [] : [raw]
+    // `[]` is a real answer ("none apply"), so it must stay distinguishable from a value the model
+    // failed to produce. A null/absent value is the latter, and so is a non-empty input where every
+    // element was unusable: reducing either to `[]` would record a positive finding the model never
+    // made, and would count as scored, so the validation retry would never see it.
+    if (raw === undefined || raw === null) return { issue: { key: p.key, action: 'dropped', original: raw } }
+    const arr = Array.isArray(raw) ? raw : [raw]
     const out = []
     let droppedAny = false
     for (const el of arr) {
       const c = coerceScalar(el, p)
       if (c.ok) out.push(c.value)
       else droppedAny = true
+    }
+    if (out.length === 0 && arr.length > 0) {
+      return { issue: { key: p.key, action: 'dropped', original: raw } }
     }
     const deduped = Array.from(new Set(out))
     const issue = droppedAny ? { key: p.key, action: 'coerced', original: raw } : undefined

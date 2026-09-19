@@ -4,6 +4,9 @@
   "description": "Claude Code plugin that evaluates support tickets with Claude and with humans, then compares the two.",
   "author": "Brian Levine <brian@balevine.com>",
   "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",

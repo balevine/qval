@@ -104,7 +104,8 @@ function runSkill(home: string): string {
   }
   engine(['assemble', '--round', '0'])
 
-  return join(home, 'tickets.qval.json')
+  // The engine puts its durable artifact in `qval-output/`, not loose in the working directory.
+  return join(home, 'qval-output', 'tickets.qval.json')
 }
 
 // --- The review half ---------------------------------------------------------

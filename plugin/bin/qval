@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // The Qval CLI. Two subcommands, both of them the plumbing behind a skill:
 //
-//   serve  [<file>] [--compare a.qval.json,b.qval.json] [--port N] [--no-open] [--out .qval-run]
+//   serve  [<file>] [--compare a.qval.json,b.qval.json] [--port N] [--no-open]
 //          Resolve the dataset and the eval file, start the review server **detached**,
 //          open a browser at it, and return immediately with the URL. Scoring 200 tickets by hand
 //          takes an hour and no Bash timeout survives that, so `serve` must not block.
 //
-//   status [--eval-file <path>] [--out .qval-run]
+//   status [--eval-file <path>]
 //          Report how the last review session ended and what is in the eval file. This is how the
 //          answer gets back to Claude, since the session outlived the command that started it.
 //
@@ -20,25 +20,26 @@
 // Dependency-free ESM on bare node, like everything else under plugin/.
 
 import { spawn } from 'node:child_process'
-import { existsSync, openSync, promises as fs, readdirSync } from 'node:fs'
+import { existsSync, promises as fs, readdirSync } from 'node:fs'
 import { userInfo } from 'node:os'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { parseArgs } from '../lib/args.mjs'
+import { flagValue, parseArgs } from '../lib/args.mjs'
 import { atomicWriteJson, readJson } from '../lib/fsUtil.mjs'
 import { normalizeSchema } from '../lib/schema.mjs'
 import { normalizeRules } from '../lib/rules.mjs'
+import { configFingerprint } from '../lib/fingerprint.mjs'
 import { isScoredResult, looksLikeEvalFile, normalizeEvalFile, ownResults } from '../lib/evalFile.mjs'
+import { defaultEvalPath, evalSearchDirs, OUTPUT_DIR, RUN_DIR } from '../lib/paths.mjs'
 import { parseTicketsFile } from '../lib/tickets.mjs'
 import { SettingsStore } from '../lib/settingsStore.mjs'
 import { pluginVersion } from '../lib/version.mjs'
-import { suggestEvalName, Workspace } from '../lib/workspace.mjs'
+import { Workspace } from '../lib/workspace.mjs'
 import { createReviewServer } from '../server/server.mjs'
 
 const EXIT = { OK: 0, USAGE: 1, INPUT: 2 }
 
-const DEFAULT_OUT_DIR = '.qval-run'
 const SESSION_FILE = 'review-session.json'
 /** The engine's config files. `serve` reads them in and writes them back, so both halves of Qval
  *  score against the same schema and rules. */
@@ -72,39 +73,38 @@ function usage(line, ...rest) {
   process.exit(EXIT.USAGE)
 }
 
-/** A `--flag value` string, or null when the flag is absent, bare, or blank. */
-function flagValue(args, name) {
-  const v = args[name]
-  if (v === undefined || v === true) return null
-  const s = String(v).trim()
-  return s.length > 0 ? s : null
-}
-
-const outDirOf = (args) => resolve(flagValue(args, 'out') ?? DEFAULT_OUT_DIR)
-const sessionFileOf = (args) => join(outDirOf(args), SESSION_FILE)
+/** Scratch, always `.qval-run/` under the working directory. Fixed so the engine can find the
+ *  session record without being told where it is. */
+const outDirOf = () => resolve(RUN_DIR)
+const sessionFileOf = () => join(outDirOf(), SESSION_FILE)
 
 // ── file resolution ───────────────────────────────────────────────────────────
 
-/**
- * `<stem>.qval.json` in the working directory, which is where `evaluate-tickets`'s engine puts it
- * too. The eval file deliberately does not follow the dataset wherever it happens to live: written
- * next to a dataset in some subdirectory it would be a second, invisible copy of the one the engine
- * writes, and would not be found by the merge-candidate scan either.
- */
-const defaultEvalPath = (dir, ticketsPath) => join(dir, suggestEvalName(ticketsPath))
-
 const isEvalName = (name) => name.endsWith('.qval.json')
 
-/** Every `*.qval.json` in `dir`, sorted, absolute. */
+/**
+ * Every `*.qval.json` Qval will consider, sorted within each location, absolute.
+ *
+ * Both `qval-output/` (where they go now) and the working directory itself (where every earlier
+ * version put them) are scanned, so upgrading neither hides an existing evaluation nor drops it out
+ * of the merge offer. The eval file deliberately does not follow the *dataset* wherever it happens
+ * to live: written next to a dataset in some subdirectory it would be invisible to both halves.
+ */
 function evalFilesIn(dir) {
-  try {
-    return readdirSync(dir)
-      .filter(isEvalName)
-      .sort()
-      .map((n) => join(dir, n))
-  } catch {
-    return []
+  const found = []
+  for (const d of evalSearchDirs(dir)) {
+    let names
+    try {
+      names = readdirSync(d)
+    } catch {
+      continue // no qval-output/ yet, which is the normal case on a first run
+    }
+    for (const n of names.filter(isEvalName).sort()) {
+      const path = join(d, n)
+      if (!found.includes(path)) found.push(path)
+    }
   }
+  return found
 }
 
 /** Does this file parse as ticket data? Content, never the filename, is what decides. */
@@ -157,7 +157,14 @@ async function resolveTarget(target, dir) {
   if (target) {
     const path = resolve(target)
     if (!existsSync(path)) fail(`MISSING_FILE ${path}`)
-    if (isEvalName(path)) return { evalPath: path, ticketsPaths: await ticketsFilesIn(dirname(path)) }
+    if (isEvalName(path)) {
+      // Look for the dataset in the working directory *and* beside the eval file. An eval file now
+      // lives in `qval-output/`, which holds no tickets, and one passed in from someone else's
+      // directory may have its dataset there instead. The fingerprint picks which is right, so
+      // offering both can't mislink — offering neither is what would fail.
+      const beside = dirname(path) === dir ? [] : await ticketsFilesIn(dirname(path))
+      return { evalPath: path, ticketsPaths: [...new Set([...(await ticketsFilesIn(dir)), ...beside])] }
+    }
     if (!(await isTicketsFile(path))) {
       fail(
         `BAD_TICKETS ${path}`,
@@ -182,7 +189,8 @@ async function resolveTarget(target, dir) {
   if (tickets.length === 0) {
     fail(
       `NO_DATASET ${dir}`,
-      `  No .json here (or in ./${QBORT_OUTPUT_DIR}/) holds ticket data, and there is no *.qval.json either.`,
+      `  No .json here (or in ./${QBORT_OUTPUT_DIR}/) holds ticket data, and there is no *.qval.json`,
+      `  here or in ./${OUTPUT_DIR}/ either.`,
       '  Pass the path to your ticket file: `qval serve <path>`. It can live anywhere.',
       '  Ticket data is `{ meta, tickets: [...] }` or a bare array, each ticket with an integer `id`.'
     )
@@ -201,10 +209,11 @@ async function resolveTarget(target, dir) {
 }
 
 /**
- * The files on offer to MERGE: every other `*.qval.json` next to the working file, plus anything
- * named with `--compare`. The browser is shown the ids and names only.
+ * The paths on offer to MERGE: every other `*.qval.json` next to the working file, plus anything
+ * named with `--compare`. Order is what the ids are assigned from, so it has to survive the trip
+ * to the child — hence paths here and `comparisonSources` there, rather than ids in two places.
  */
-function resolveCandidates(args, dir, evalPath) {
+function resolveCandidatePaths(args, dir, evalPath) {
   const explicit = (flagValue(args, 'compare') ?? '')
     .split(',')
     .map((s) => s.trim())
@@ -214,8 +223,14 @@ function resolveCandidates(args, dir, evalPath) {
   for (const p of [...evalFilesIn(dir), ...explicit]) {
     if (p !== evalPath && !paths.includes(p)) paths.push(p)
   }
-  return paths.map((path, i) => ({ id: `c${i + 1}`, name: basename(path), path }))
+  return paths
 }
+
+/**
+ * The offer as the workspace takes it. The browser is shown the `id` and the `name` only, which is
+ * what keeps paths off the wire; the id is positional, so this is the one place that mints one.
+ */
+const comparisonSources = (paths) => paths.map((path, i) => ({ id: `c${i + 1}`, name: basename(path), path }))
 
 // ── the engine's config files, shared both ways ───────────────────────────────
 
@@ -240,16 +255,30 @@ async function seedConfigFromEngineFiles(settings, dir) {
   if (Object.keys(patch).length) await settings.set(patch)
 }
 
+/** The config fingerprint of whatever settings hold right now. Taken before and after the session,
+ *  so the write-back below can tell an edit from a no-op. */
+async function currentConfigFingerprint(settings) {
+  const s = await settings.get()
+  return configFingerprint(s.schema, s.rules)
+}
+
 /**
  * The other direction, once the session is over: write the config the person actually used back out
- * for the engine to read. Cheap to do and it is what keeps a browser-side setup runnable headlessly.
+ * for the engine to read, so a schema built in the browser is one `/qval:evaluate-tickets` can run.
+ *
+ * **Only when they changed it.** These are files in the user's working directory that they may well
+ * have written by hand, and a session opened on an older eval file loads *that file's* config into
+ * settings — so writing unconditionally would stamp an archived schema over the current one just for
+ * looking at an old result. Comparing fingerprints keeps the write to the case it exists for.
  */
-async function writeConfigForEngine(settings, dir) {
+async function writeConfigForEngine(settings, dir, seededFingerprint) {
   const s = await settings.get()
-  if (!s.schema.length) return
+  if (!s.schema.length) return false
+  if (configFingerprint(s.schema, s.rules) === seededFingerprint) return false
   await fs.mkdir(dir, { recursive: true })
   await fs.writeFile(join(dir, SCHEMA_FILE), `${JSON.stringify(s.schema, null, 2)}\n`, 'utf8')
   await fs.writeFile(join(dir, RULES_FILE), s.rules.endsWith('\n') ? s.rules : `${s.rules}\n`, 'utf8')
+  return true
 }
 
 // ── the session record ────────────────────────────────────────────────────────
@@ -284,8 +313,8 @@ async function cmdServe(args) {
   if (args.child) return cmdServeChild(args)
 
   const dir = process.cwd()
-  const outDir = outDirOf(args)
-  const recordPath = sessionFileOf(args)
+  const outDir = outDirOf()
+  const recordPath = sessionFileOf()
 
   // A session already running here is the common re-ask ("open it again"), not an error.
   const existing = await readJson(recordPath)
@@ -297,15 +326,13 @@ async function cmdServe(args) {
   }
 
   const { evalPath, ticketsPaths } = await resolveTarget(args._[0], dir)
-  const candidates = resolveCandidates(args, dir, evalPath)
+  const candidatePaths = resolveCandidatePaths(args, dir, evalPath)
 
   const port = flagValue(args, 'port')
   if (port !== null && !/^\d+$/.test(port)) usage(`BAD_PORT ${port}`, '  --port takes a number.')
 
   await fs.mkdir(outDir, { recursive: true })
   const sessionId = `${process.pid}-${Date.now()}`
-  const logPath = join(outDir, 'review.log')
-  const log = openSync(logPath, 'a')
 
   const childArgs = [
     selfPath,
@@ -313,22 +340,22 @@ async function cmdServe(args) {
     '--child',
     '--session',
     sessionId,
-    '--out',
-    outDir,
     '--eval-file',
     evalPath,
     '--dir',
     dir
   ]
   if (ticketsPaths.length) childArgs.push('--tickets', ticketsPaths.join(','))
-  if (candidates.length) childArgs.push('--compare', candidates.map((c) => c.path).join(','))
+  if (candidatePaths.length) childArgs.push('--compare', candidatePaths.join(','))
   if (port !== null) childArgs.push('--port', port)
   if (args['no-open']) childArgs.push('--no-open')
 
+  // Nothing to capture: the child prints nothing, and every error it can anticipate goes into the
+  // session record below, which is where `status` reads it from and where the parent reads it here.
   const child = spawn(process.execPath, childArgs, {
     cwd: dir,
     detached: true,
-    stdio: ['ignore', log, log]
+    stdio: 'ignore'
   })
   child.unref()
 
@@ -339,7 +366,7 @@ async function cmdServe(args) {
     const record = await readJson(recordPath)
     if (record?.sessionId === sessionId) {
       if (record.status === 'error') {
-        fail(`SERVER_FAILED ${record.error ?? 'unknown error'}`, `  See ${logPath}.`)
+        fail(`SERVER_FAILED ${record.error ?? 'unknown error'}`)
       }
       if (record.status === 'live') {
         console.log('SERVING')
@@ -351,7 +378,13 @@ async function cmdServe(args) {
         return
       }
     }
-    if (Date.now() > deadline) fail('SERVER_TIMEOUT the review server did not start.', `  See ${logPath}.`)
+    if (Date.now() > deadline) {
+      fail(
+        'SERVER_TIMEOUT the review server did not start.',
+        `  It was given ${STARTUP_TIMEOUT_MS / 1000} seconds and never reported in.`,
+        '  Try again; if it keeps happening, check that node runs on this machine.'
+      )
+    }
     await new Promise((r) => setTimeout(r, 100))
   }
 }
@@ -398,7 +431,7 @@ function openBrowser(url) {
 
 async function cmdServeChild(args) {
   const sessionId = flagValue(args, 'session')
-  const outDir = outDirOf(args)
+  const outDir = outDirOf()
   const recordPath = join(outDir, SESSION_FILE)
   const dir = flagValue(args, 'dir') ?? process.cwd()
   const evalPath = flagValue(args, 'eval-file')
@@ -448,10 +481,11 @@ async function cmdServeChild(args) {
       await workspace.open(ticketsPaths[0])
       await workspace.save(evalPath)
     }
+    // Taken after the open, so it reflects whatever the session actually starts from (the eval
+    // file's own snapshot, or the seeded engine files). What it is compared against at the end.
+    const seededFingerprint = await currentConfigFingerprint(settings)
     base.datasetPath = (await settings.get()).lastDatasetPath ?? base.datasetPath
-    workspace.setComparisonSources(
-      comparePaths.map((path, i) => ({ id: `c${i + 1}`, name: basename(path), path }))
-    )
+    workspace.setComparisonSources(comparisonSources(comparePaths))
 
     server = createReviewServer({ workspace, settings, appVersion })
     const url = await server.listen(Number(flagValue(args, 'port') ?? 0))
@@ -471,12 +505,14 @@ async function cmdServeChild(args) {
     const outcome = await Promise.race([server.finished, abandonedByNobody])
     await server.close()
     // The person may have rewritten the schema or the rules in the browser; hand that back to the
-    // engine so a follow-up `/qval:evaluate-tickets` scores against what they actually used.
-    await writeConfigForEngine(settings, dir)
+    // engine so a follow-up `/qval:evaluate-tickets` scores against what they actually used. A
+    // session that changed neither leaves their files alone.
+    const configWritten = await writeConfigForEngine(settings, dir, seededFingerprint)
     await writeRecord(recordPath, {
       ...base,
       status: outcome.reason,
       endedAt: nowIso(),
+      configWritten,
       // The URL carries the token, and the token dies with the session.
       url: null,
       port: null,
@@ -502,7 +538,7 @@ async function cmdServeChild(args) {
 // ── status ───────────────────────────────────────────────────────────────────
 
 async function cmdStatus(args) {
-  const recordPath = sessionFileOf(args)
+  const recordPath = sessionFileOf()
   const record = await readJson(recordPath)
 
   if (!record) {
@@ -519,6 +555,8 @@ async function cmdStatus(args) {
       if (!record.opened) console.log('OPENED no')
     }
     if (record.endedAt) console.log(`ENDED ${record.endedAt}`)
+    // Only printed when it happened, because it means two files in the working directory changed.
+    if (record.configWritten) console.log(`CONFIG_WRITTEN ${SCHEMA_FILE}, ${RULES_FILE}`)
     if (record.error) console.log(`ERROR ${record.error}`)
   }
 

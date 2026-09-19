@@ -5,7 +5,7 @@ import { SettingsModal } from '@/components/SettingsModal'
 import { MergeModal } from '@/components/MergeModal'
 import { DatasetView } from '@/components/DatasetView'
 import { ToastProvider, useToast } from '@/state/ToastContext'
-import { SettingsProvider } from '@/state/SettingsContext'
+import { SettingsProvider, useSettings } from '@/state/SettingsContext'
 import { SessionProvider, useSession } from '@/state/SessionContext'
 import { errorMessage } from '@/lib/format'
 import { api } from '@/lib/apiClient'
@@ -39,8 +39,8 @@ function FinishedState({ workingPath }: { workingPath: string | null }) {
         <Check className="mx-auto h-10 w-10" strokeWidth={1.5} />
         <h1 className="mt-4 font-mono text-lg font-bold uppercase tracking-widest">Review finished</h1>
         <p className="mt-2 text-sm text-ink/60">
-          Everything is saved. You can close this tab — run <span className="font-mono">/qval:status</span> in
-          Claude Code to see the result.
+          Everything is saved. You can close this tab — ask Claude Code how the session went and it will
+          report the counts back.
         </p>
         {workingPath ? <p className="mt-4 break-all font-mono text-[11px] text-ink/40">{workingPath}</p> : null}
       </div>
@@ -53,6 +53,7 @@ function AppShell() {
   const [mergeOpen, setMergeOpen] = useState(false)
   const [finished, setFinished] = useState(false)
   const { session, loading } = useSession()
+  const { flush } = useSettings()
   const { toast } = useToast()
 
   const hasDataset = !!session
@@ -61,6 +62,9 @@ function AppShell() {
   // only ever infer the end from the tab going away.
   const finish = async () => {
     try {
+      // The server stops on `done` and the CLI then reads the settings store to hand the schema and
+      // rules back to the evaluation skill, so a debounced edit has to land before we say we're done.
+      await flush()
       await api.review.done()
       setFinished(true)
     } catch (e) {

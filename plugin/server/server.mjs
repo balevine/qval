@@ -12,8 +12,9 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { configLocked } from '../lib/evalFile.mjs'
 import { validateValues } from '../lib/evalValidate.mjs'
-import { reportPathFor } from '../lib/workspace.mjs'
+import { reportPathFor } from '../lib/paths.mjs'
 
 /**
  * @typedef {import('@shared/types').Settings} Settings
@@ -321,6 +322,10 @@ export function createReviewServer({
   /**
    * Update the working config. Deliberately narrow: the review UI edits the schema, the rules, and
    * the evaluator's display name, and nothing else reaches the settings store.
+   *
+   * The schema and rules freeze once a file has any scores, and that is checked here as well as in
+   * the browser. The browser disables the editors, but a rule the page is merely asked to follow is
+   * not a rule: an eval file must never end up claiming a schema its scores were not given under.
    * @param {unknown} body
    * @param {import('node:http').ServerResponse} res
    */
@@ -332,6 +337,14 @@ export function createReviewServer({
     if ('rules' in b) patch.rules = /** @type {Settings['rules']} */ (b.rules)
     if ('evaluatorName' in b) patch.evaluatorName = String(b.evaluatorName ?? '')
     if (Object.keys(patch).length === 0) return sendError(res, 400, 'Nothing to update.')
+    if ('schema' in patch || 'rules' in patch) {
+      // Check against the file on disk: an evaluation may have added scores while this session was
+      // open, which freezes the schema, and our in-memory copy would not know that yet.
+      await workspace.adoptExternalWrite()
+      if (configLocked(workspace.currentWorkingFile())) {
+        return sendError(res, 409, 'This file already has scores, so its schema and rules are frozen.')
+      }
+    }
 
     const next = await settings.set(patch)
     // Keep an unlocked working file's config snapshot in sync as the user edits schema/rules, so

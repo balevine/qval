@@ -10,7 +10,7 @@ import { atomicWriteJson, readJson } from './fsUtil.mjs'
 /**
  * Reads/writes the persisted `settings.json`. The directory is injected so the store is testable
  * against a temp dir, and so the host decides where it lives (the CLI puts it in the run directory,
- * `.qval-run/`, beside the session record and the server log).
+ * `.qval-run/`, beside the session record).
  */
 export class SettingsStore {
   /** @param {string} dir */

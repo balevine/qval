@@ -1,5 +1,5 @@
 /**
- * Shared types used by the renderer, the main process, and the review server.
+ * Shared types used by the renderer, the review server, and the evaluation engine.
  *
  * This file is the single source of truth for the host contract and the persisted data model.
  * `README.md` describes what the application does with them.
@@ -235,8 +235,8 @@ export interface Settings {
  * only host there is now that the Electron shell is gone.
  *
  * **Nothing here takes or returns a path the UI chose.** The host resolves every file before the
- * browser exists, so opening, merging, and exporting are all named by id or by nothing at all
- *. That is why there is no `open` and no directory picker.
+ * browser exists, so opening, merging, and exporting are all named by id or by nothing at all.
+ * That is why there is no `open` and no directory picker.
  */
 export interface IpcApi {
   app: {

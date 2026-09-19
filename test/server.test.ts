@@ -239,6 +239,60 @@ describe('POST /api/result', () => {
     expect(human.results[0].values).toEqual({ empathy: 5 })
   })
 
+  it('adopts an evaluation written underneath it instead of overwriting it', async () => {
+    // The whole point of the guard: the working file is held in memory for the length of a session,
+    // and `/qval:evaluate-tickets` writes the same path. Without the re-read the next human edit
+    // persists a copy taken before the run and silently erases every LLM result in it.
+    const { call, evalPath } = await start()
+
+    const before = (await readJson(evalPath)) as EvalFile
+    await atomicWriteJson(evalPath, {
+      ...before,
+      meta: { ...before.meta, updatedAt: '2030-01-01T00:00:00.000Z' },
+      evaluators: [
+        {
+          id: 'llm',
+          kind: 'llm',
+          name: 'LLM · Opus 5',
+          provider: 'claude-code',
+          model: 'Opus 5',
+          results: [{ ticketId: 1, values: { resolved: true }, evaluatedAt: 'then', error: null }]
+        }
+      ]
+    })
+
+    const res = await call('/api/result', {
+      method: 'POST',
+      body: JSON.stringify({ ticketId: 2, values: { resolved: false } })
+    })
+    expect(res.status).toBe(200)
+
+    const after = (await readJson(evalPath)) as EvalFile
+    expect(after.evaluators.find((e) => e.kind === 'llm')?.results).toHaveLength(1)
+    expect(after.evaluators.find((e) => e.kind === 'human')?.results[0].ticketId).toBe(2)
+  })
+
+  it('refuses to write over a file that became a different evaluation', async () => {
+    const { call, evalPath } = await start()
+    const before = (await readJson(evalPath)) as EvalFile
+    const replaced = {
+      ...before,
+      meta: {
+        ...before.meta,
+        updatedAt: '2030-01-01T00:00:00.000Z',
+        dataset: { ...before.meta.dataset, fingerprint: 'sha256:somethingelse' }
+      }
+    }
+    await atomicWriteJson(evalPath, replaced)
+
+    const res = await call('/api/result', {
+      method: 'POST',
+      body: JSON.stringify({ ticketId: 1, values: { resolved: true } })
+    })
+    expect(res.status).toBe(500)
+    expect(await readJson(evalPath)).toEqual(replaced) // refusing means writing nothing
+  })
+
   it('rejects a ticket id that is not a number', async () => {
     const { call } = await start()
     const res = await call('/api/result', { method: 'POST', body: JSON.stringify({ ticketId: '1' }) })

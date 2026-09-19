@@ -13,36 +13,54 @@
 //          [--preview]    print the compiled static prefix the model will read
 //          [--rules <file>] [--schema <file>]
 //   plan     --tickets <file> --model "<name>" [--eval-file <file>] [--rules <file>]
-//            [--schema <file>] [--out .qval-run] [--mode all|remaining|selection --ids 1,2,3]
-//            [--batch-size 10]
-//   assemble [--out .qval-run] --round <r>
-//   retry    [--out .qval-run] --round 1
-//   status   [--eval-file <file>] [--out .qval-run]
+//            [--schema <file>] [--mode all|remaining|selection --ids 1,2,3] [--batch-size 10]
+//   assemble --round <r>
+//   retry    --round 1
+//   status   [--eval-file <file>]
 //
-// Run state lives in <out>/run-context.json; each round's manifest in <out>/round-<r>.json; each
-// batch's compiled prompt in <out>/prompt-<r>-<i>.txt and the subagent's raw output in
-// <out>/batch-<r>-<i>.json. The durable artifact is the eval file, written outside <out>.
+// Two directories, both under the user's working directory, and neither one configurable.
+//
+// .qval-run/ holds the working files for a run:
+//   run-context.json      what this run is doing (which tickets, which model, which eval file)
+//   round-<r>.json        which tickets went into which batch, for round <r>
+//   prompt-<r>-<i>.txt    the text handed to the subagent for batch <i>
+//   batch-<r>-<i>.json    the answer that subagent wrote back, before any checking
+// `plan` deletes all four kinds at the start of a run, so a run can never read the last one's
+// files by mistake. /qval:review keeps its own files here too and those are left alone.
+//
+// qval-output/ holds the eval file, which is the point of the whole exercise. It is kept out of
+// .qval-run/ because that directory is safe to delete and this file is not.
 //
 // stdout is deliberately a short summary: the engine reads batch files in Node, so ticket content
 // and scored values never round-trip through Claude's context.
 //
 // Exit codes are control flow for the skill: 0 ok, 1 usage, 2 unusable input (missing file, bad
-// JSON, invalid schema, fingerprint or model mismatch), 3 scaffolded (stop and let the user edit).
+// JSON, invalid schema, fingerprint or model mismatch, a live review session holding the eval
+// file), 3 scaffolded (stop and let the user edit).
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { basename, extname, join, resolve } from 'node:path'
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { parseArgs } from '../../lib/args.mjs'
+import { flagValue, parseArgs } from '../../lib/args.mjs'
 import { atomicWriteJson, readJson } from '../../lib/fsUtil.mjs'
 import { normalizeSchema, propertyErrors } from '../../lib/schema.mjs'
 import { normalizeRules } from '../../lib/rules.mjs'
 import { configFingerprint, datasetFingerprint } from '../../lib/fingerprint.mjs'
+import { defaultEvalPath, RUN_DIR } from '../../lib/paths.mjs'
 import { compilePrompt, SYSTEM_PROMPT } from '../../lib/promptCompiler.mjs'
 import { parseTicketsFile } from '../../lib/tickets.mjs'
 import { validateValues } from '../../lib/evalValidate.mjs'
 import { pluginVersion } from '../../lib/version.mjs'
-import { DEFAULT_BATCH_SIZE } from '../../lib/evaluation.mjs'
 import {
   applyLlmResults,
   createWorkingFile,
@@ -59,8 +77,12 @@ const EXIT = { OK: 0, USAGE: 1, INPUT: 2, SCAFFOLDED: 3 }
 const PROPERTY_TYPES = ['score', 'boolean', 'enum', 'text']
 const DEFAULT_RULES_FILE = 'EVAL_RULES.md'
 const DEFAULT_SCHEMA_FILE = 'EVAL_SCHEMA.json'
-const DEFAULT_OUT_DIR = '.qval-run'
 const RUN_CONTEXT_FILE = 'run-context.json'
+/** Written by `qval serve` in the same directory. Read (never written) to spot a live review. */
+const REVIEW_SESSION_FILE = 'review-session.json'
+/** Tickets per batch when `--batch-size` says otherwise. Bigger batches mean fewer subagents and
+ *  less overhead, but a truncated response loses more tickets at once. */
+const DEFAULT_BATCH_SIZE = 10
 /** Recorded on the evaluator: what produced these scores. */
 const PROVIDER = 'claude-code'
 // `meta.appVersion` is read from the plugin manifest (see ../../lib/version.mjs), never kept here.
@@ -83,14 +105,6 @@ function usage(line, ...rest) {
   console.error(line)
   for (const r of rest) console.error(r)
   process.exit(EXIT.USAGE)
-}
-
-/** A `--flag value` string, or null when the flag is absent, bare, or blank. */
-function flagValue(args, name) {
-  const v = args[name]
-  if (v === undefined || v === true) return null
-  const s = String(v).trim()
-  return s.length > 0 ? s : null
 }
 
 function writeJsonSync(path, value) {
@@ -306,15 +320,70 @@ function resolveModel(args) {
   )
 }
 
-/** `<dataset stem>.qval.json` in the working directory (mirrors `suggestEvalName` in lib/workspace.mjs,
- *  which the CLI uses. The engine stays free of that import so it pulls in nothing it does not need). */
-function defaultEvalPath(ticketsPath) {
-  const stem = basename(ticketsPath, extname(ticketsPath)).replace(/\.qval$/, '')
-  return resolve(`${stem}.qval.json`)
+/**
+ * Stop with an error if someone has this eval file open in a review session right now.
+ *
+ * The review server keeps the eval file in memory for as long as the browser tab is open, which can
+ * be hours. If we wrote our scores to that file meanwhile, the next time the person scored a ticket
+ * by hand the server would save its own in-memory copy over the top and every score we just wrote
+ * would be gone.
+ *
+ * The server guards against this too, by re-reading the file before each of its own saves. This is
+ * the other half: it fails early and says so, before any prompt has been built.
+ */
+async function refuseIfReviewLive(outDir, evalFilePath) {
+  const record = await readJson(join(outDir, REVIEW_SESSION_FILE))
+  if (record?.status !== 'live' || !pidAlive(record.pid)) return
+  if (!record.workingPath || canonicalPath(record.workingPath) !== canonicalPath(evalFilePath)) return
+  fail(
+    `SESSION_LIVE ${evalFilePath}`,
+    '  A review session (`/qval:review`) has this eval file open and is writing to it.',
+    '  Ask the user to click FINISH in that tab, then re-run.',
+    `  URL ${record.url ?? '(unknown)'}`
+  )
 }
 
-async function loadContext(args) {
-  const outDir = resolve(flagValue(args, 'out') ?? DEFAULT_OUT_DIR)
+/**
+ * Turn a path into one canonical form, so that two ways of writing the same file compare as equal.
+ *
+ * Symlinks are the reason. On macOS `/var` is a symlink to `/private/var`, so one process can write
+ * `/var/…/tickets.qval.json` into the session record while another reads the same file as
+ * `/private/var/…/tickets.qval.json`. Comparing the two as plain strings says they are different
+ * files, and the check above would never fire.
+ *
+ * The file does not have to exist yet, and often does not: `qval-output/` is created by the run
+ * this is called from. So this resolves the closest parent directory that does exist and puts the
+ * remaining names back on the end.
+ */
+function canonicalPath(p) {
+  const abs = resolve(p)
+  const tail = []
+  let head = abs
+  for (;;) {
+    try {
+      return join(realpathSync(head), ...tail)
+    } catch {
+      const parent = dirname(head)
+      if (parent === head) return abs // walked to the root without finding anything real
+      tail.unshift(basename(head))
+      head = parent
+    }
+  }
+}
+
+/** Is that pid still around? A record left behind by a killed server is not a live session. */
+function pidAlive(pid) {
+  if (typeof pid !== 'number') return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return err?.code === 'EPERM'
+  }
+}
+
+async function loadContext() {
+  const outDir = resolve(RUN_DIR)
   const ctx = await readJson(join(outDir, RUN_CONTEXT_FILE))
   if (!ctx) fail(`NO_CONTEXT ${join(outDir, RUN_CONTEXT_FILE)}`, '  Run `plan` first.')
   return { ctx, outDir }
@@ -342,6 +411,38 @@ async function loadRunEvalFile(ctx) {
 // ── rounds ────────────────────────────────────────────────────────────────────
 
 /**
+ * The three kinds of file one evaluation run creates: the prompt sent to each subagent, the answer
+ * each subagent writes back, and the list of which tickets went into which batch.
+ *
+ * These names are matched exactly rather than by a wildcard, because `/qval:review` keeps its own
+ * files in the same directory (`settings.json` and `review-session.json`). Deleting those would
+ * lose the user's evaluator name and leave `qval status` with nothing to report.
+ */
+const RUN_SCRATCH_RE = /^(prompt-\d+-\d+\.txt|batch-\d+-\d+\.json|round-\d+\.json)$/
+
+/**
+ * Delete the files left behind by the previous evaluation run.
+ *
+ * Batch files are numbered, not named after the run that made them, so a run with fewer batches
+ * reuses the filenames of a longer one. Scoring 40 tickets writes batch-0-0 through batch-0-3;
+ * re-scoring a single ticket later writes only batch-0-0, on top of a file that is already there.
+ *
+ * If these were left in place and a subagent then failed to write anything, `assemble` would open
+ * the leftover file and read the *previous* run's answers as if they were this run's. The ticket
+ * numbers inside usually match, so nothing would look wrong: the old scores would be saved with a
+ * new timestamp and counted as successes. `assemble` is supposed to record an error when a batch
+ * file is missing, and deleting these is what makes that true.
+ *
+ * Run only after `plan` has finished checking its inputs. A `plan` that stops with an error must
+ * leave the directory exactly as it found it, previous run included.
+ */
+function clearRunScratch(outDir) {
+  for (const name of readdirSync(outDir)) {
+    if (RUN_SCRATCH_RE.test(name)) rmSync(join(outDir, name), { force: true })
+  }
+}
+
+/**
  * Compile one prompt file per batch and write the round's manifest. `previous` (retry rounds only)
  * carries the first-attempt results so `assemble` can merge cleaner-wins against them.
  */
@@ -350,6 +451,9 @@ function buildRound(ctx, round, targets, rules, schema, previous) {
     const compiled = compilePrompt({ rules, schema, tickets: batchTickets })
     const promptFile = resolve(join(ctx.outDir, `prompt-${round}-${index}.txt`))
     const batchFile = resolve(join(ctx.outDir, `batch-${round}-${index}.json`))
+    // `clearRunScratch` only runs during `plan`, so this covers running `retry --round 1` twice:
+    // without it, the second attempt would read the first attempt's answers as its own.
+    rmSync(batchFile, { force: true })
     // A subagent has no system slot, so the system prompt is inlined at the top of the file
     // rather than sent separately.
     writeFileSync(promptFile, `${SYSTEM_PROMPT}\n\n${compiled.full}\n`)
@@ -419,7 +523,10 @@ async function cmdPlan(args) {
   const configFp = configFingerprint(schema, rules)
 
   const evalFileFlag = flagValue(args, 'eval-file')
-  const evalFilePath = evalFileFlag ? resolve(evalFileFlag) : defaultEvalPath(ticketsPath)
+  const evalFilePath = evalFileFlag ? resolve(evalFileFlag) : defaultEvalPath(process.cwd(), ticketsPath)
+
+  const outDir = resolve(RUN_DIR)
+  await refuseIfReviewLive(outDir, evalFilePath)
 
   let file = null
   if (existsSync(evalFilePath)) {
@@ -475,8 +582,10 @@ async function cmdPlan(args) {
     return
   }
 
-  const outDir = resolve(flagValue(args, 'out') ?? DEFAULT_OUT_DIR)
   mkdirSync(outDir, { recursive: true })
+  // Every check above has passed, so this run is definitely going ahead. The previous run's files
+  // are now out of date, and leaving them would let this run read them by mistake (see below).
+  clearRunScratch(outDir)
 
   if (!file) {
     file = createWorkingFile({
@@ -557,13 +666,17 @@ function readBatch(batchFile) {
 }
 
 async function cmdAssemble(args) {
-  const { ctx, outDir } = await loadContext(args)
+  const { ctx, outDir } = await loadContext()
   const roundFlag = flagValue(args, 'round')
   const round = roundFlag === null ? 0 : Number(roundFlag)
   if (!Number.isInteger(round) || round < 0) usage(`BAD_ROUND ${roundFlag}`, '  assemble needs --round <n>')
 
   const manifest = await readJson(join(outDir, `round-${round}.json`))
   if (!manifest) fail(`NO_ROUND round-${round}.json not found in ${outDir}`, '  Run `plan` (or `retry`) first.')
+
+  // `plan` checked this too, but a session can be started while the subagents are out, and this is
+  // the command that actually writes the eval file.
+  await refuseIfReviewLive(outDir, resolve(ctx.evalFilePath))
 
   const file = await loadRunEvalFile(ctx)
   // The file's own config snapshot is what the config fingerprint was taken over, so it is the
@@ -637,7 +750,7 @@ async function cmdAssemble(args) {
 // ── retry ─────────────────────────────────────────────────────────────────────
 
 async function cmdRetry(args) {
-  const { ctx, outDir } = await loadContext(args)
+  const { ctx, outDir } = await loadContext()
   const roundFlag = flagValue(args, 'round')
   const round = roundFlag === null ? 1 : Number(roundFlag)
   if (round !== 1) {
@@ -694,12 +807,12 @@ async function cmdStatus(args) {
   const flag = flagValue(args, 'eval-file')
   let evalFilePath = flag ? resolve(flag) : null
   if (!evalFilePath) {
-    const outDir = resolve(flagValue(args, 'out') ?? DEFAULT_OUT_DIR)
+    const outDir = resolve(RUN_DIR)
     const ctx = await readJson(join(outDir, RUN_CONTEXT_FILE))
     evalFilePath = ctx?.evalFilePath ?? null
   }
   if (!evalFilePath) {
-    usage('MISSING_EVAL_FILE', `  pass --eval-file <path>, or run where a ${DEFAULT_OUT_DIR}/${RUN_CONTEXT_FILE} exists`)
+    usage('MISSING_EVAL_FILE', `  pass --eval-file <path>, or run where a ${RUN_DIR}/${RUN_CONTEXT_FILE} exists`)
   }
 
   const raw = await readJson(evalFilePath)

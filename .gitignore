@@ -10,3 +10,6 @@ coverage/
 .notes
 .plans/
 .qval-run/
+
+# Qval's own generated output, if you run it in this directory.
+qval-output/

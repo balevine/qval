@@ -85,9 +85,11 @@ On the first run the skill scaffolds **`EVAL_RULES.md`** and **`EVAL_SCHEMA.json
 - **Rules** are a free-form block telling the evaluator *how* to score (prose, definitions, scoring philosophy, edge cases). They go into the prompt verbatim and sit next to the human form in the browser.
 - **Schema** is the ordered list of typed properties every ticket is scored on. Each one has a `label`, a camelCase `key`, a `type` (**score**, **boolean**, **enum**, or **text**), an optional `multiple` flag for multi-valued answers, and a `description` shown to both the model and the human.
 
-It then confirms the model to record, plans the run, fans the batches out to parallel subagents, assembles the results, and runs **one** retry round over anything that failed or came back off-schema. The result is a `*.qval.json` in your working directory, named after the ticket file it scored.
+It then confirms the model to record, plans the run, fans the batches out to parallel subagents, assembles the results, and runs **one** retry round over anything that failed or came back off-schema. The result is a `*.qval.json` in **`qval-output/`**, named after the ticket file it scored.
 
-Validation is **per value, never per ticket**. Each value is coerced where that is unambiguous (a score clamped to range and snapped to step, an enum case-matched to a canonical option) or **dropped** where it isn't, leaving that one property unscored rather than discarding the ticket's other answers. Every coercion and drop is recorded in the result's `issues[]`, so nothing is silently faked.
+Validation is **per value, never per ticket**. Each value is coerced where that is unambiguous (a score clamped to range and snapped to step, an enum case-matched to a canonical option) or **dropped** where it isn't, leaving that one property unscored rather than discarding the ticket's other answers. Every coercion and drop is recorded in the result's `issues[]`, so nothing is silently faked. On a multi-valued property an empty list means "none apply" and is a real answer, so a value the model couldn't produce is dropped instead of being turned into one.
+
+Ticket text goes to the model fenced and labeled as data, and a ticket that forges its own fence markers has them defused. A support inbox is full of text written by strangers, and it is worth knowing that a ticket asking for a good score is something the evaluator is told to judge rather than obey.
 
 Full skill docs: [`plugin/skills/evaluate-tickets/README.md`](plugin/skills/evaluate-tickets/README.md).
 
@@ -101,30 +103,49 @@ This starts a local server and opens a browser tab at it. Claude prints the URL 
 
 The session runs **detached** and outlives the command that started it, because scoring a few hundred tickets by hand takes an hour and no Bash timeout survives that. Come back whenever and ask Claude how it went.
 
-With no argument the CLI works out what to open, which is the single `*.qval.json` in the directory, or a single ticket file if you have not run an evaluation yet. A directory with several datasets and no eval file is refused with the list rather than guessed at. Re-opening an existing eval file is never ambiguous, however many datasets are lying around: it names its tickets by fingerprint, so the right ones are found without asking.
+With no argument the CLI works out what to open, which is the single `*.qval.json` in `qval-output/`, or a single ticket file if you have not run an evaluation yet. A directory with several datasets and no eval file is refused with the list rather than guessed at. Re-opening an existing eval file is never ambiguous, however many datasets are lying around: it names its tickets by fingerprint, so the right ones are found without asking.
 
 In the tab:
 
-- **Settings (gear)** holds the schema and the rules, plus your evaluator name. These are the same `EVAL_SCHEMA.json` and `EVAL_RULES.md` the evaluation skill uses, seeded in when the session starts and written back when it ends, so both halves always score against the same criteria. **Preview compiled prompt** shows exactly what the model is sent.
+- **Settings (gear)** holds the schema and the rules, plus your evaluator name. These are the same `EVAL_SCHEMA.json` and `EVAL_RULES.md` the evaluation skill uses, seeded in when the session starts and written back when it ends *if you changed them*, so both halves always score against the same criteria and reading an old eval file never rewrites your current config. **Preview compiled prompt** shows exactly what the model is sent.
 - **Click any row** for the ticket's conversation and the human evaluation form. Fill in the same schema by hand. The LLM's values are shown for reference, clearly labeled, and they never pre-fill yours. Scoring is partial by design (any subset, in any order) and every change is written to the file as it happens. Use prev / next / next-unevaluated to sweep the queue.
 - **MERGE** adds other people's eval files as read-only comparisons (below).
 - **FINISH** ends the session. Ask Claude how it went and it will report the counts back.
 
-> **Config lock.** Once an evaluation has any real score, its schema and rules **freeze**, so a file's data can never contradict the config it declares. Once it has an LLM score, its model is **pinned** too. Scoring under different criteria means a new eval file, which is exactly what merging gates on.
+> **Config lock.** Once an evaluation has any real score, its schema and rules **freeze**, so a file's data can never contradict the config it declares. Once it has an LLM score, its model is **pinned** too. Scoring the same tickets under different criteria means a **new eval file** — `/qval:evaluate-tickets` with `--eval-file <new path>` — which is exactly what merging gates on. There is no unlocking in place.
+
+> **One writer at a time.** The review session and the evaluation skill write the same file, and a review session holds it open for as long as you are scoring. Running an evaluation against a file a live session has open is refused rather than allowed to overwrite your work, and the review server picks up an evaluation that landed underneath it rather than writing over it. Click **FINISH** before starting a run and neither comes up.
 
 > **LLM values are never editable by hand.** To disagree with the model, fill in the human evaluation. The comparison is what shows the gap.
 
 ### 3. Merge and compare
 
-**MERGE** offers the other `*.qval.json` files found next to your working file. To bring in one from somewhere else, name it when you start the review and Claude passes it along (`--compare ../alice/tickets.qval.json`). The browser is only ever shown the names, never the paths. A file is accepted only if it matches **both** the dataset and the schema and rules of your working file, otherwise it is refused on its own row with the specific reason.
+**MERGE** offers the other `*.qval.json` files in `qval-output/`, so bringing a colleague's file into the comparison means dropping it in there. To bring in one from somewhere else, name it when you start the review and Claude passes it along (`--compare ../alice/tickets.qval.json`). The browser is only ever shown the names, never the paths. A file is accepted only if it matches **both** the dataset and the schema and rules of your working file, otherwise it is refused on its own row with the specific reason.
 
 All LLM evaluators pool into one group and all humans into another. They are never combined into a single number. Per ticket and per property you get each group's aggregate (score mean and standard deviation, boolean and enum majority and agreement, multi-select selection rates) and the **comparison** between them (score Δ, majority match, or set overlap), plus a dataset-level roll-up of how closely the model tracks human judgment. The results table has **Compare / LLM / Human** view modes, and any ticket opens to the full side-by-side.
 
-**EXPORT REPORT**, which appears with the merged roster in the summary header, writes the flat per-ticket aggregates, the comparisons, and the dataset roll-up beside the working file (`tickets.qval.json` → `tickets.report.json`). Its destination is derived rather than chosen. Read-only, for analysis elsewhere, and not re-importable as a working file.
+**EXPORT REPORT**, which appears with the merged roster in the summary header, writes the flat per-ticket aggregates, the comparisons, and the dataset roll-up beside the working file in `qval-output/` (`tickets.qval.json` → `tickets.report.json`). Its destination is derived rather than chosen. Read-only, for analysis elsewhere, and not re-importable as a working file.
 
 ### 4. Housekeeping
 
-Both commands keep their scratch in **`.qval-run/`** in the working directory: the compiled prompts and raw subagent output for an evaluation, and the session record, settings, and server log for a review. The eval file itself is deliberately kept out of it, because that is the durable artifact. Add `.qval-run/` to your `.gitignore` if you track the directory.
+Qval writes two directories in your working directory and never anywhere else.
+
+**`qval-output/`** holds what you keep: the `*.qval.json` eval files and any `*.report.json` you export. It is also where both commands look, so a file someone sends you goes in there to become a merge candidate.
+
+**`.qval-run/`** is Qval's working directory. An evaluation keeps the prompts it sends and the answers that come back here; a review keeps its session record and your settings here.
+
+Starting an evaluation deletes the prompts and answers from the previous one, so a run is never built from a file an older run left lying around. Your settings and the record of your last review session are not touched, which is what lets you come back later and ask Claude how that session went.
+
+**Add both to your `.gitignore`.** These are generated files about a dataset, not source, and they have no more business in your repository than a build directory does.
+
+```
+qval-output/
+.qval-run/
+```
+
+Ignoring them is not the same as being able to delete them. `.qval-run/` is genuinely disposable between runs. `qval-output/` is not: it holds the evaluation itself, including however many tickets you scored by hand, and nothing else has a copy. Back it up the way you would any other work you cannot regenerate.
+
+Neither is configurable. The two halves find each other's files by knowing where they are, and a flag that let them disagree would buy nothing. An eval file written by an earlier version, loose in the working directory, is still found and still opened where it lies.
 
 Nothing needs saving. Every change, human value or config edit, is written through as it happens.
 

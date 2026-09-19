@@ -110,6 +110,9 @@ export function createApiClient(options: ApiClientOptions = {}): IpcApi {
 
   const loadSession = (): Promise<SessionPayload> => request<SessionPayload>('/api/session')
 
+  /** Tail of the human-edit write queue (see `human.setValues`). Kept rejection-free. */
+  let writeQueue: Promise<unknown> = Promise.resolve()
+
   return {
     app: {
       getVersion: async () => (await loadSession()).appVersion
@@ -141,8 +144,15 @@ export function createApiClient(options: ApiClientOptions = {}): IpcApi {
       exportReport: async () => (await request<{ path: string | null }>('/api/export', {})).path
     },
     human: {
-      setValues: async (ticketId, values) => {
-        await request('/api/result', { ticketId, values })
+      // Sent one at a time. Each request carries all of the ticket's scores, and the server keeps
+      // whichever arrives last. Browsers do not promise that two requests arrive in the order they
+      // were sent, so without this queue a slow earlier request could land second and undo a score
+      // the person had just changed.
+      setValues: (ticketId, values) => {
+        const run = () => request('/api/result', { ticketId, values }).then(() => undefined)
+        const result = writeQueue.then(run, run)
+        writeQueue = result.catch(() => undefined)
+        return result
       }
     },
     review: {

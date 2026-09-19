@@ -35,9 +35,10 @@ export function RulesEditor() {
     <div className="space-y-3">
       {locked ? (
         <LockNotice>
-          Rules are locked — this file already has evaluations, so its scoring guidance is frozen.{' '}
-          <span className="font-bold text-ink">Open</span> its tickets.json to start a fresh evaluation with
-          different rules. (You can still preview.)
+          Rules are locked — this file already has evaluations, so its scoring guidance is frozen. Scoring the
+          same tickets under different rules means a new eval file: run{' '}
+          <span className="font-mono">/qval:evaluate-tickets</span> with{' '}
+          <span className="font-mono">--eval-file &lt;new path&gt;</span>. (You can still preview.)
         </LockNotice>
       ) : null}
       <Textarea

@@ -2,7 +2,7 @@ import { promises as fs } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { suggestEvalName, Workspace } from '@lib/workspace.mjs'
+import { Workspace } from '@lib/workspace.mjs'
 import { SettingsStore } from '@lib/settingsStore.mjs'
 import { atomicWriteJson, readJson } from '@lib/fsUtil.mjs'
 import { applyLlmResults, createWorkingFile, normalizeEvalFile } from '@lib/evalFile.mjs'
@@ -17,14 +17,6 @@ beforeEach(async () => {
 })
 afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true })
-})
-
-describe('suggestEvalName', () => {
-  it('derives <stem>.qval.json from the dataset path', () => {
-    expect(suggestEvalName('/x/tickets.json')).toBe('tickets.qval.json')
-    expect(suggestEvalName('/x/run1.qval.json')).toBe('run1.qval.json')
-    expect(suggestEvalName(null)).toBe('evaluation.qval.json')
-  })
 })
 
 describe('ensureConfigStamped', () => {

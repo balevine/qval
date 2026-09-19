@@ -58,6 +58,16 @@ describe('validateValues', () => {
     expect(validateValues({ tags: [] }, schema).values.tags).toEqual([]) // "none apply" is a value
   })
 
+  it('multi-select: an unusable value is dropped, not reduced to "none apply"', () => {
+    // `[]` is a positive finding. Answering it on the model's behalf would both invent a judgment
+    // it never made and count as scored, so the one validation retry would never see the ticket.
+    for (const raw of ['n/a', null, ['nope'], 42]) {
+      const { values, issues } = validateValues({ tags: raw }, schema)
+      expect(values.tags).toBeUndefined()
+      expect(hasDrops(issues)).toBe(true)
+    }
+  })
+
   it('leaves an omitted property unscored with no issue', () => {
     const { values, issues } = validateValues({ empathy: 3 }, schema)
     expect('resolved' in values).toBe(false)

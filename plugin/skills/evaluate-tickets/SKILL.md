@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 Scores a ticket file and writes a Qval eval file (`*.qval.json`). The **ambient Claude model** (via subagents) supplies the *judgment*. A deterministic Node engine (`engine.mjs`) owns everything structural: config validation, both fingerprints, target selection, batching, prompt compilation, per-value validation and repair, retry accounting, and the atomic eval-file writes. Never hand those structural jobs to the model.
 
-The engine lives next to this file, at `engine.mjs`. Let `ENGINE` be its absolute path, which is `${CLAUDE_PLUGIN_ROOT}/skills/evaluate-tickets/engine.mjs`. Run all `node "$ENGINE" ...` commands from the user's working directory. Scratch state goes to `.qval-run/` (the engine's `--out` default). The eval file itself is written **outside** it, in the working directory, because that is the durable artifact the user opens for review.
+The engine lives next to this file, at `engine.mjs`. Let `ENGINE` be its absolute path, which is `${CLAUDE_PLUGIN_ROOT}/skills/evaluate-tickets/engine.mjs`. Run all `node "$ENGINE" ...` commands from the user's working directory. Scratch state goes to `.qval-run/` and the eval file to `qval-output/`, both under that directory and **neither configurable** — the review half writes its session record into the same `.qval-run/`, and the durable artifact is kept out of a directory that is safe to delete.
 
 **How to read the engine.** Each command's first stdout/stderr token plus its exit code is the contract. Branch on those, not on the prose around them. Exit codes: **0** ok, **1** a bad or missing flag (fix the command), **2** unusable state (fix the files or ask the user; never retry the same command verbatim), **3** `init` scaffolded config files (stop and let the user edit them).
 
@@ -82,9 +82,9 @@ State the resolved value to the user before running. It is stamped permanently i
 node "$ENGINE" plan --tickets <tickets.json> --model "<resolved model>"
 ```
 
-Optional flags: `--eval-file <path>` (default: `<tickets stem>.qval.json` in the working directory), `--mode all|remaining|selection` with `--ids 1,2,3` for `selection` (default `all`), `--batch-size N` (default 10), `--rules`/`--schema` for non-default config paths, `--out <dir>` (default `.qval-run`).
+Optional flags: `--eval-file <path>` (default: `qval-output/<tickets stem>.qval.json`, or an existing `<tickets stem>.qval.json` loose in the working directory, which is where older versions put it), `--mode all|remaining|selection` with `--ids 1,2,3` for `selection` (default `all`), `--batch-size N` (default 10), `--rules`/`--schema` for non-default config paths.
 
-**Only ask about mode when the eval file already exists** (`ls *.qval.json`, or run `node "$ENGINE" status --eval-file <path>`). Use `AskUserQuestion`: re-score **all** tickets, or only the **remaining** ones (unevaluated, errored, or with a dropped value). For a fresh file, just run `all`.
+**Only ask about mode when the eval file already exists** (`ls qval-output/*.qval.json *.qval.json`, or run `node "$ENGINE" status --eval-file <path>`). Use `AskUserQuestion`: re-score **all** tickets, or only the **remaining** ones (unevaluated, errored, or with a dropped value). For a fresh file, just run `all`.
 
 Read the output:
 
@@ -95,6 +95,7 @@ Read the output:
   - `DATASET_MISMATCH`: that eval file is of different tickets. Use a different `--eval-file` or a different dataset.
   - `CONFIG_MISMATCH`: the rules or schema changed since that file was scored. Scoring under new criteria needs a **new** eval file (`--eval-file <new path>`). Do not "fix" this by editing the existing file.
   - `MODEL_LOCKED` / `PROVIDER_LOCKED`: the file was already scored by a different model, or by a desktop release that used its own provider. One model scores every ticket in a file, so re-run with that model or start a new eval file. Tell the user which.
+  - `SESSION_LIVE`: a review session (`/qval:review`) has this eval file open and is writing to it. Ask the user to click **FINISH** in that tab, then re-run. Do not work around it by passing a different `--eval-file` unless they actually want a second evaluation.
   - `BAD_TICKETS`, `BAD_JSON`, `BAD_EVAL_FILE`, `UNKNOWN_IDS`, `MISSING_TICKETS <path>`.
 
 ## Step 6. Fan out one subagent per batch
@@ -130,7 +131,7 @@ It prints `ASSEMBLED`, then `EVALUATED`, `DROPPED`, `FAILED`, **`NEEDS_RETRY`**,
 
   Round 1 always prints `NEEDS_RETRY 0`, since the retry is capped at one round. Anything still unresolved is printed on a **`RESIDUAL n`** line instead. **Do not loop.** Report the residual; a genuinely unscoreable ticket stays in the file as an error, and the user can re-plan with `--mode remaining` later if they want.
 
-Failures here: `STALE_FILE` (exit 2) means the eval file changed on disk since `plan` (a review session probably has it open). Tell the user to close it there, then re-run `plan`. `NOT_ASSEMBLED` means round 0 hasn't been assembled yet. `RETRY_CAPPED` means you passed a round other than 1.
+Failures here: `SESSION_LIVE` (exit 2) means a review session opened on this file while the subagents were out — ask the user to click FINISH, then re-run `plan`. `STALE_FILE` (exit 2) means the file changed on disk since `plan` some other way; same answer. `NOT_ASSEMBLED` means round 0 hasn't been assembled yet. `RETRY_CAPPED` means you passed a round other than 1.
 
 ## Step 8. Report and hand off
 
@@ -147,8 +148,9 @@ Do not print the whole eval file. Offer to summarize a few tickets if they want 
 - **Never hand-write or hand-edit the `.qval.json`.** Every write goes through the engine, which is what keeps ids, fingerprints, `updatedAt`, and the evaluator record consistent. A hand-edit can silently break merging with other people's files.
 - **Ticket ids come from the dataset, never from the model.** The engine looks the model's output up by id and records an error for anything it skipped. Don't post-edit ids or values to "fix" a run.
 - **Values are validated per property, never per ticket.** An out-of-range or off-schema value is coerced when unambiguous and dropped when not, with a non-silent `issues[]` trail. One bad field never discards a ticket's other values, so `DROPPED n` is information, not a failed run.
-- **Don't run while a review session has the same eval file open and is editing it.** The stale-file guard will refuse rather than overwrite a human evaluation made mid-run. `qval status` says whether one is live.
+- **Don't run while a review session has the same eval file open.** `plan` and `assemble` refuse with `SESSION_LIVE` rather than race the server for the file. `qval status` says whether one is live. This is a refusal, not lost work: ask the user to click FINISH and run again.
 - **No token or cost accounting exists for ambient runs.** Don't estimate or report either. There is no metered API call here to price.
 - **Batch size is a tradeoff**, not a tuning knob to fiddle with. Bigger batches mean fewer subagents and less overhead, but a truncated or garbled response loses more tickets at once. 10 is the default for that reason.
-- `.qval-run/` is scratch. Suggest adding it to `.gitignore` if the user doesn't want it tracked.
+- **`plan` deletes the previous run's working files.** The prompts, the batch files, and the round lists from an earlier run are removed once this run is going ahead, so a batch file is either this run's or not there at all. Never write a batch file yourself to patch up a run — re-run `plan` instead. The files `/qval:review` keeps in the same directory are left alone.
+- **Suggest gitignoring both `qval-output/` and `.qval-run/`** if the working directory is a repo. Both are generated. They differ in what may be *deleted*, not in what may be committed: `.qval-run/` is disposable between runs, while `qval-output/` holds the eval file and any human evaluation in it, so never suggest clearing that one.
 - Requires Node (`node --version`). No npm install; the engine is dependency-free ESM.

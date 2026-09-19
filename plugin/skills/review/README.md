@@ -8,7 +8,7 @@ The LLM half is the sibling skill [`evaluate-tickets`](../evaluate-tickets/READM
 
 - **Claude Code** (the skill runs inside it, and `bin/qval` lands on its PATH while the plugin is enabled).
 - **Node.js** on your `PATH` (`node --version`). No `npm install`: the CLI, the server, and the UI bundle are all dependency-free and ship with the plugin.
-- A **ticket file** or an existing **`*.qval.json`** in the directory you run it from. Ticket files are found by shape rather than by name, so your own export works as well as a generated set, and a `qbort-output/` subdirectory is searched too. You can also just name the file: `qval serve <path>`.
+- A **ticket file** in the directory you run it from, or an existing **`*.qval.json`** in its `qval-output/`. Ticket files are found by shape rather than by name, so your own export works as well as a generated set, and a `qbort-output/` subdirectory is searched too. You can also just name the file: `qval serve <path>`.
 
 ## Usage
 
@@ -34,7 +34,7 @@ Two files merge only when **both** fingerprints match: the same tickets *and* th
 
 ## Shared config
 
-`serve` seeds a new session's schema and rules from `EVAL_SCHEMA.json` and `EVAL_RULES.md` when they're there, and writes back whatever you ended up using when the session ends. So the two skills always score against the same config, whichever one you set it up in.
+`serve` seeds a new session's schema and rules from `EVAL_SCHEMA.json` and `EVAL_RULES.md` when they're there, and writes back whatever you ended up using when the session ends — but only if you changed it. So the two skills always score against the same config, whichever one you set it up in, and opening an old eval file just to read it never rewrites the config in your working directory.
 
 ## Files
 
@@ -46,4 +46,4 @@ SKILL.md          instructions Claude follows (not human docs)
 ../../lib/        the logic, shared with the engine and the UI
 ```
 
-`.qval-run/` is scratch: the session record, the settings, and the server log. Add it to `.gitignore` if you don't want it tracked.
+Gitignore both. `.qval-run/` is scratch (the session record and your settings) and is safe to delete between runs. `qval-output/` holds your eval files and exported reports — it's where `serve` looks for what to open and what to offer for merging, and it's the one thing here you can't regenerate, so ignore it in git but don't clear it.
