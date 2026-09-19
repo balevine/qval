@@ -1,6 +1,6 @@
 # Qval
 
-A local-first **Claude Code plugin** for evaluating customer-support tickets with an LLM, with humans, and then comparing the two. It scores any ticket set in [the ticket format](#the-ticket-format), whether you exported it from your own helpdesk or generated it with [Qbort](https://github.com/balevine/qbort), Qval's sibling tool for making realistic fake ones.
+A local-first **Claude Code plugin** for evaluating customer support tickets with an LLM, with humans, and then comparing the two. It scores any ticket set in [the ticket format](#the-ticket-format), whether you exported it from your own helpdesk or generated it with [Qbort](https://github.com/balevine/qbort), Qval's sibling tool for making realistic fake ones.
 
 It is two commands. `/qval:evaluate-tickets` runs the LLM evaluation inside Claude Code on whatever model your session is using. `/qval:review` opens a browser tab for the parts a person has to do by hand, which are writing the schema and the rules, filling in the human evaluation ticket by ticket, and reading the comparison. Both halves read and write the same `*.qval.json`, and two people's files of the same ticket set **merge** into per-ticket means, distributions, and a human-vs-LLM comparison.
 

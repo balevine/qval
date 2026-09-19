@@ -1,6 +1,6 @@
 ---
 name: evaluate-tickets
-description: Score a set of customer-support tickets with the ambient Claude model against user-written rules and a typed schema, writing a Qval eval file (*.qval.json).
+description: Score a set of customer support tickets with the ambient Claude model against user-written rules and a typed schema, writing a Qval eval file (*.qval.json).
 disable-model-invocation: true
 ---
 

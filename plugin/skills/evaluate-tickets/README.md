@@ -1,6 +1,6 @@
 # evaluate-tickets (Claude Code skill)
 
-A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill that evaluates a set of customer-support tickets and writes a Qval eval file (`*.qval.json`). It is [Qval](../../../README.md)'s **LLM evaluation** step, and the only one there is: rather than calling an LLM API with your own key, it uses the **ambient Claude model** (via parallel subagents) to do the judging, while a small, dependency-free Node engine owns everything structural.
+A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill that evaluates a set of customer support tickets and writes a Qval eval file (`*.qval.json`). It is [Qval](../../../README.md)'s **LLM evaluation** step, and the only one there is: rather than calling an LLM API with your own key, it uses the **ambient Claude model** (via parallel subagents) to do the judging, while a small, dependency-free Node engine owns everything structural.
 
 Everything else happens in the review UI, which is the sibling skill **[`/qval:review`](../review/SKILL.md)**. Browsing tickets, reading the LLM's scores per ticket, doing the **human evaluation** by hand, merging other people's files, and the comparison and insights surfaces all live there. This skill produces the file they operate on.
 

@@ -2,7 +2,7 @@
   "name": "qval",
   "version": "0.2.0",
   "description": "Claude Code plugin that evaluates support tickets with Claude and with humans, then compares the two.",
-  "author": "Brian Levine <balevine@gmail.com>",
+  "author": "Brian Levine <brian@balevine.com>",
   "license": "MIT",
   "scripts": {
     "dev": "vite",

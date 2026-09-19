@@ -41,6 +41,7 @@ import { configFingerprint, datasetFingerprint } from '../../lib/fingerprint.mjs
 import { compilePrompt, SYSTEM_PROMPT } from '../../lib/promptCompiler.mjs'
 import { parseTicketsFile } from '../../lib/tickets.mjs'
 import { validateValues } from '../../lib/evalValidate.mjs'
+import { pluginVersion } from '../../lib/version.mjs'
 import { DEFAULT_BATCH_SIZE } from '../../lib/evaluation.mjs'
 import {
   applyLlmResults,
@@ -62,8 +63,9 @@ const DEFAULT_OUT_DIR = '.qval-run'
 const RUN_CONTEXT_FILE = 'run-context.json'
 /** Recorded on the evaluator: what produced these scores. */
 const PROVIDER = 'claude-code'
-/** Cosmetic `meta.appVersion`. The skill folder is copyable, so it can't read the repo's package.json. */
-const APP_VERSION = '0.2.0'
+// `meta.appVersion` is read from the plugin manifest (see ../../lib/version.mjs), never kept here.
+// The manifest ships inside the plugin, so this works from a copied skill folder too, which is what
+// the old hard-coded constant was working around.
 
 const templatePath = (name) => fileURLToPath(new URL(`./templates/${name}`, import.meta.url))
 const enginePath = fileURLToPath(import.meta.url)
@@ -478,7 +480,7 @@ async function cmdPlan(args) {
 
   if (!file) {
     file = createWorkingFile({
-      appVersion: APP_VERSION,
+      appVersion: await pluginVersion(),
       now: nowIso(),
       dataset: { fingerprint: datasetFp, ticketCount: tickets.length, source },
       config: { fingerprint: configFp, schema, rules }

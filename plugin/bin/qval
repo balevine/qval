@@ -32,6 +32,7 @@ import { normalizeRules } from '../lib/rules.mjs'
 import { isScoredResult, looksLikeEvalFile, normalizeEvalFile, ownResults } from '../lib/evalFile.mjs'
 import { parseTicketsFile } from '../lib/tickets.mjs'
 import { SettingsStore } from '../lib/settingsStore.mjs'
+import { pluginVersion } from '../lib/version.mjs'
 import { suggestEvalName, Workspace } from '../lib/workspace.mjs'
 import { createReviewServer } from '../server/server.mjs'
 
@@ -43,8 +44,7 @@ const SESSION_FILE = 'review-session.json'
  *  score against the same schema and rules. */
 const RULES_FILE = 'EVAL_RULES.md'
 const SCHEMA_FILE = 'EVAL_SCHEMA.json'
-/** Cosmetic `meta.appVersion`, matching the engine's. */
-const APP_VERSION = '0.2.0'
+// `meta.appVersion` is read from the plugin manifest (see ../lib/version.mjs), never kept here.
 /** One extra directory to look in, because Qbort (the sibling generator) puts its finished ticket
  *  files there, one timestamped file per run, and making people move it by hand would be a chore.
  *  A convenience for one known producer and nothing more: a ticket file is identified by its shape,
@@ -419,7 +419,8 @@ async function cmdServeChild(args) {
   }
 
   const settings = new SettingsStore(outDir)
-  const workspace = new Workspace(settings, APP_VERSION)
+  const appVersion = await pluginVersion()
+  const workspace = new Workspace(settings, appVersion)
   let server = null
 
   try {
@@ -452,7 +453,7 @@ async function cmdServeChild(args) {
       comparePaths.map((path, i) => ({ id: `c${i + 1}`, name: basename(path), path }))
     )
 
-    server = createReviewServer({ workspace, settings, appVersion: APP_VERSION })
+    server = createReviewServer({ workspace, settings, appVersion })
     const url = await server.listen(Number(flagValue(args, 'port') ?? 0))
     const opened = args['no-open'] ? false : openBrowser(url)
 

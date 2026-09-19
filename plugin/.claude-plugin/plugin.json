@@ -2,10 +2,10 @@
   "name": "qval",
   "displayName": "Qval",
   "version": "0.2.0",
-  "description": "Evaluate customer-support tickets with Claude, then score them yourself and compare.",
+  "description": "Evaluate customer support tickets with Claude, then score them yourself and compare.",
   "author": {
     "name": "Brian Levine",
-    "email": "balevine@gmail.com",
+    "email": "brian@balevine.com",
     "url": "https://github.com/balevine"
   },
   "homepage": "https://github.com/balevine/qval",
