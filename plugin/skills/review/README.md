@@ -8,7 +8,7 @@ The LLM half is the sibling skill [`evaluate-tickets`](../evaluate-tickets/READM
 
 - **Claude Code** (the skill runs inside it, and `bin/qval` lands on its PATH while the plugin is enabled).
 - **Node.js** on your `PATH` (`node --version`). No `npm install`: the CLI, the server, and the UI bundle are all dependency-free and ship with the plugin.
-- A **`tickets.json`** (Qbort's shape) or an existing **`*.qval.json`** in the directory you run it from.
+- A **ticket file** (Qbort's shape) or an existing **`*.qval.json`** in the directory you run it from. Qbort's own output is found in `qbort-output/` below it, so there is nothing to move after a run.
 
 ## Usage
 

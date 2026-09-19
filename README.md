@@ -46,9 +46,11 @@ Both skills set `disable-model-invocation: true`, so they cost nothing in your c
 
 ## Usage
 
-Put your `tickets.json` in a directory and open Claude Code there. Qval reads and writes in the working directory and never modifies the ticket set.
+Put your ticket file in a directory and open Claude Code there. Qval reads and writes in the working directory and never modifies the ticket set.
 
 The ticket file is whatever [Qbort](https://github.com/balevine/qbort) produces, so you can port your own data into that shape. Either `{ meta, tickets: [...] }` or a bare array, where each ticket is `{ id, subject, status, messages: [{ from, body, isStaff, createdAt }] }`. Only the integer `id` is required.
+
+If you generated it with Qbort, there is nothing to move: Qbort writes `qbort-output/tickets-YYYYMMDD-HHMMSS.json` and Qval looks there too. It keeps every run, so once you have generated a few you will be asked which one you meant.
 
 ### 1. Score with Claude
 
@@ -61,7 +63,7 @@ On the first run the skill scaffolds **`EVAL_RULES.md`** and **`EVAL_SCHEMA.json
 - **Rules** are a free-form block telling the evaluator *how* to score (prose, definitions, scoring philosophy, edge cases). They go into the prompt verbatim and sit next to the human form in the browser.
 - **Schema** is the ordered list of typed properties every ticket is scored on. Each one has a `label`, a camelCase `key`, a `type` (**score**, **boolean**, **enum**, or **text**), an optional `multiple` flag for multi-valued answers, and a `description` shown to both the model and the human.
 
-It then confirms the model to record, plans the run, fans the batches out to parallel subagents, assembles the results, and runs **one** retry round over anything that failed or came back off-schema. The result is a `*.qval.json` beside your tickets.
+It then confirms the model to record, plans the run, fans the batches out to parallel subagents, assembles the results, and runs **one** retry round over anything that failed or came back off-schema. The result is a `*.qval.json` in your working directory, named after the ticket file it scored.
 
 Validation is **per value, never per ticket**. Each value is coerced where that is unambiguous (a score clamped to range and snapped to step, an enum case-matched to a canonical option) or **dropped** where it isn't, leaving that one property unscored rather than discarding the ticket's other answers. Every coercion and drop is recorded in the result's `issues[]`, so nothing is silently faked.
 
@@ -77,7 +79,7 @@ This starts a local server and opens a browser tab at it. Claude prints the URL 
 
 The session runs **detached** and outlives the command that started it, because scoring a few hundred tickets by hand takes an hour and no Bash timeout survives that. Come back whenever and ask Claude how it went.
 
-With no argument the CLI works out what to open, which is the single `*.qval.json` in the directory, or a single `tickets.json` if you have not run an evaluation yet. An ambiguous directory is refused with the list rather than guessed at.
+With no argument the CLI works out what to open, which is the single `*.qval.json` in the directory, or a single ticket file if you have not run an evaluation yet. A directory with several datasets and no eval file is refused with the list rather than guessed at. Re-opening an existing eval file is never ambiguous, however many datasets are lying around: it names its tickets by fingerprint, so the right ones are found without asking.
 
 In the tab:
 

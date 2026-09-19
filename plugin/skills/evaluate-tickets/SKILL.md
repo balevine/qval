@@ -14,9 +14,11 @@ The engine lives next to this file, at `engine.mjs`. Let `ENGINE` be its absolut
 
 ## Step 1. Locate the tickets file
 
-Find the dataset to evaluate (`ls *.json`, or a path the user gave). It is a `tickets.json` in Qbort's shape: either `{ meta, tickets: [...] }` or a bare array of tickets. Anything matching that shape works, whoever produced it. Only an integer `id` per ticket is required; `subject`, `status`, and `messages` are coerced when absent, and `meta` is optional (it is dropped before fingerprinting).
+Find the dataset to evaluate (a path the user gave, else `ls *.json qbort-output/*.json`). It is a tickets file in Qbort's shape: either `{ meta, tickets: [...] }` or a bare array of tickets. Anything matching that shape works, whoever produced it. Only an integer `id` per ticket is required; `subject`, `status`, and `messages` are coerced when absent, and `meta` is optional (it is dropped before fingerprinting).
 
-If more than one candidate exists and the user didn't name one, **ask with `AskUserQuestion`**. Evaluating the wrong dataset produces a file that will never merge with anyone else's.
+**Qbort writes to `qbort-output/`**, one timestamped `tickets-YYYYMMDD-HHMMSS.json` per run, and never overwrites an earlier one. So look there as well as in the working directory, and expect to find several.
+
+If more than one candidate exists and the user didn't name one, **ask with `AskUserQuestion`** — the newest is a reasonable thing to offer first, not a safe thing to assume. Evaluating the wrong dataset produces a file that will never merge with anyone else's.
 
 ## Step 2. Ensure the config files exist
 

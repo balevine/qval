@@ -136,6 +136,25 @@ describe('explicit-path file operations', () => {
     expect(found.tickets.map((t) => t.id)).toEqual([1, 2])
   })
 
+  it('picks the matching dataset out of a list of candidates', async () => {
+    // A host that cannot narrow a directory down to one file hands over all of them: the
+    // fingerprint is the disambiguator, so this cannot mislink. Qbort keeps every run, which is
+    // what makes several ticket files in one place the normal case.
+    const { home, ticketsPath, ws } = await seedWorkspace('candidates')
+    await ws.open(ticketsPath)
+    const out = join(home, 'run.qval.json')
+    await ws.save(out)
+
+    const decoy = join(home, 'decoy-tickets.json')
+    await atomicWriteJson(decoy, [ticket(9)])
+
+    const cold = new Workspace(new SettingsStore(join(dir, 'candidates-cold')), '0.1.0', () => 'now')
+    const found = await cold.open(out, async () => [decoy, ticketsPath])
+    expect(found.tickets.map((t) => t.id)).toEqual([1, 2])
+    // The one that matched is remembered, so the next open skips the scan entirely.
+    expect((await cold.settings.get()).lastDatasetPath).toBe(ticketsPath)
+  })
+
   it('rejects a located tickets file from a different dataset', async () => {
     const { home, ticketsPath, ws } = await seedWorkspace('mismatch')
     await ws.open(ticketsPath)
@@ -146,6 +165,10 @@ describe('explicit-path file operations', () => {
     await atomicWriteJson(other, [ticket(9)])
     const cold = new Workspace(new SettingsStore(join(dir, 'mismatch-cold')), '0.1.0', () => 'now')
     await expect(cold.open(out, async () => other)).rejects.toThrow(/different dataset/)
+    // Same when a whole list is offered and none of it is this dataset: "offered and wrong" is a
+    // different answer from "nothing offered", which is the one that reports as not-found.
+    const cold2 = new Workspace(new SettingsStore(join(dir, 'mismatch-cold-2')), '0.1.0', () => 'now')
+    await expect(cold2.open(out, async () => [other])).rejects.toThrow(/different dataset/)
   })
 
   it('gates addComparison on both fingerprints and refuses duplicates', async () => {

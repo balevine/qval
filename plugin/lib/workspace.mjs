@@ -20,10 +20,13 @@ import { atomicWriteJson, readJson } from './fsUtil.mjs'
  */
 
 /**
- * Last-resort source of a tickets.json path, used when an eval file's dataset can't be found from
- * what we already know. The caller decides how to ask (a native dialog today, a cwd scan under the
- * CLI). Resolves to null when there's no answer.
- * @typedef {() => Promise<string | null>} DatasetLocator
+ * Last-resort source of tickets paths, used when an eval file's dataset can't be found from what we
+ * already know. The caller decides how to ask (a cwd scan, under the CLI). Resolves to a path, to a
+ * list of candidates to try in order, or to null when there's no answer.
+ *
+ * A list is safe because the fingerprint, not the caller, decides which one it is — so a host that
+ * cannot narrow the directory down to one file should hand over all of them rather than give up.
+ * @typedef {() => Promise<string | string[] | null>} DatasetLocator
  */
 
 /**
@@ -287,12 +290,18 @@ export class Workspace {
       if (t) return t
     }
 
-    const p = locate ? await locate() : null
-    if (!p) return null
-    const t = await this.tryLoadTickets(p, fingerprint)
-    if (!t) throw new Error('Those tickets do not match this eval file (different dataset).')
-    await this.settings.set({ lastDatasetPath: p })
-    return t
+    const located = locate ? await locate() : null
+    const candidates = located == null ? [] : Array.isArray(located) ? located : [located]
+    if (candidates.length === 0) return null
+    for (const p of candidates) {
+      const t = await this.tryLoadTickets(p, fingerprint)
+      if (!t) continue
+      await this.settings.set({ lastDatasetPath: p })
+      return t
+    }
+    // Something was offered and none of it was this dataset, which is a different answer from
+    // "nothing was offered" and gets a different message upstream.
+    throw new Error('Those tickets do not match this eval file (different dataset).')
   }
 
   /**

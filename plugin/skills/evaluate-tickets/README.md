@@ -8,7 +8,7 @@ Everything else happens in the review UI, which is the sibling skill **[`/qval:r
 
 - **Claude Code** (the skill runs inside it). No Anthropic API key needed; that's the point.
 - **Node.js** on your `PATH` (`node --version`). No `npm install`, since the engine is dependency-free ESM.
-- A **`tickets.json`** to evaluate, in the shape [Qbort](https://github.com/balevine/qbort) produces. Any file matching that shape works, so you can port your own ticket set into it: either `{ meta, tickets: [...] }` or a bare array, where each ticket is `{ id, subject, status, messages: [{ from, body, isStaff, createdAt }] }`. Only the integer `id` is required.
+- A **ticket file** to evaluate, in the shape [Qbort](https://github.com/balevine/qbort) produces (it writes `qbort-output/tickets-YYYYMMDD-HHMMSS.json`). Any file matching that shape works, so you can port your own ticket set into it: either `{ meta, tickets: [...] }` or a bare array, where each ticket is `{ id, subject, status, messages: [{ from, body, isStaff, createdAt }] }`. Only the integer `id` is required.
 
 ## Install
 
@@ -33,7 +33,7 @@ Everything else happens in the review UI, which is the sibling skill **[`/qval:r
 
 ## Usage
 
-1. `cd` into the directory holding your `tickets.json` (the skill reads and writes there).
+1. `cd` into the directory holding your ticket file (the skill reads and writes there). Qbort's own output is found in `qbort-output/` below it. Qbort keeps one timestamped file per run, so you'll be asked which one you meant once you have generated a few.
 2. Invoke the skill by typing **`/qval:evaluate-tickets`**. It is deliberately not model-invocable: it stays out of the context window until you ask for it, which means asking in prose ("evaluate these tickets") will not trigger it.
 3. If **`EVAL_RULES.md`** and **`EVAL_SCHEMA.json`** don't exist, the skill scaffolds them from the templates and stops so you can say what you actually want measured. Describe it in prose and Claude drafts both files; `engine.mjs config --check` validates the schema and prints it back as a table before anything runs. `/qval:review` reads and writes the same two files, so a schema built in the browser is one this skill can run against.
 4. Confirm the **model** to record. It's stamped permanently into the eval file, so there's no default and no placeholder; the skill asks if it can't resolve one.
@@ -46,7 +46,7 @@ Everything else happens in the review UI, which is the sibling skill **[`/qval:r
 
 A standard Qval eval file: a snapshot of `{schema, rules}`, a `dataset` fingerprint and a `config` fingerprint, and an `llm` evaluator whose `provider` is `claude-code` and whose `model` is the one you confirmed (so it shows up as `LLM · Opus 5`). It references the dataset by fingerprint rather than embedding the tickets.
 
-When you omit `--eval-file`, the path is derived from the dataset filename (`tickets.json` → `./tickets.qval.json`).
+When you omit `--eval-file`, the path is derived from the dataset filename and written to the working directory, wherever the dataset itself lives (`qbort-output/tickets-20260918-221724.json` → `./tickets-20260918-221724.qval.json`).
 
 The fingerprints are computed by the very same code the review UI runs, so two files of the same tickets, rules, and schema always **merge** with each other, whichever side produced them.
 
@@ -54,7 +54,7 @@ The fingerprints are computed by the very same code the review UI runs, so two f
 
 ```
 skill (SKILL.md drives Claude):
-  ├─ locate tickets.json                (ask if ambiguous)
+  ├─ locate the ticket file             (./ and qbort-output/; ask if ambiguous)
   ├─ engine.mjs init                    (scaffold EVAL_RULES.md + EVAL_SCHEMA.json, then stop)
   ├─ draft rules + schema with the user
   ├─ engine.mjs config --check          (row-level errors, property table, config fingerprint)

@@ -20,7 +20,9 @@ The CLI lives at `${CLAUDE_PLUGIN_ROOT}/bin/qval`. Let `QVAL` be that absolute p
 "$QVAL" serve
 ```
 
-With no argument it works out what to open: a single `*.qval.json` in the directory, or a single `tickets.json` (Qbort's shape) if there is no eval file yet. Pass the file explicitly when the user named one, as `"$QVAL" serve <path>`.
+With no argument it works out what to open: a single `*.qval.json` in the directory, or a single ticket file (Qbort's shape) if there is no eval file yet. It looks in the working directory and in `qbort-output/` below it, which is where Qbort puts a run. Pass the file explicitly when the user named one, as `"$QVAL" serve <path>`.
+
+Qbort keeps every run under its own timestamped name, so more than one dataset in `qbort-output/` is ordinary. Starting a **new** evaluation over several of them is refused as `AMBIGUOUS` with the list, because nothing but the user knows which run they meant. **Resuming** an existing `*.qval.json` is not, because an eval file names its dataset by fingerprint and the relink finds it on its own.
 
 Read the first token of stdout:
 
@@ -62,6 +64,7 @@ When they say they are finished (or ask what happened):
 
 ## Notes / invariants
 
+- **The eval file goes in the working directory, not beside the dataset.** That is where `/qval:evaluate-tickets` writes its own, and where the merge-candidate scan looks. A dataset under `qbort-output/` does not drag the eval file down there with it.
 - **The server never sees a path.** Both files are resolved here, before the browser exists, and no endpoint accepts one. That is what removes the path-traversal problem instead of defending against it. Merging works the same way: `serve` resolves the mergeable files and the browser picks one by name.
 - **Merging refuses on mismatched fingerprints**, and it should. Two eval files pool into one comparison only when they are of the same tickets *and* the same schema *and* the same rules. The refusal shows up in the merge panel with the reason.
 - **The config files are shared with `/qval:evaluate-tickets`.** `serve` seeds a new session's schema and rules from `EVAL_SCHEMA.json` / `EVAL_RULES.md` when they exist, and writes back whatever the person ended up using when the session ends. So a schema built in the browser is the one a follow-up LLM run scores against.

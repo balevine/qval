@@ -22,7 +22,7 @@
 import { spawn } from 'node:child_process'
 import { existsSync, openSync, promises as fs, readdirSync } from 'node:fs'
 import { userInfo } from 'node:os'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { parseArgs } from '../lib/args.mjs'
@@ -45,6 +45,10 @@ const RULES_FILE = 'EVAL_RULES.md'
 const SCHEMA_FILE = 'EVAL_SCHEMA.json'
 /** Cosmetic `meta.appVersion`, matching the engine's. */
 const APP_VERSION = '0.2.0'
+/** Where Qbort puts its finished ticket files, one timestamped file per run. It stopped writing a
+ *  `tickets.json` beside the working directory, so scanning only the working directory would find
+ *  nothing at all in the ordinary case of "I just generated a set, now score it". */
+const QBORT_OUTPUT_DIR = 'qbort-output'
 
 /** How long the parent waits for the child to publish a live session record. */
 const STARTUP_TIMEOUT_MS = 20_000
@@ -79,8 +83,13 @@ const sessionFileOf = (args) => join(outDirOf(args), SESSION_FILE)
 
 // ── file resolution ───────────────────────────────────────────────────────────
 
-/** `<stem>.qval.json` beside a tickets file. */
-const defaultEvalPath = (ticketsPath) => join(dirname(ticketsPath), suggestEvalName(ticketsPath))
+/**
+ * `<stem>.qval.json` in the working directory, which is where `evaluate-tickets`'s engine puts it
+ * too. The eval file deliberately does not follow the dataset into a subdirectory: Qbort's tickets
+ * live under `qbort-output/` now, and an eval file written there would be a second, invisible copy
+ * of the one the engine writes, and would not be found by the merge-candidate scan either.
+ */
+const defaultEvalPath = (dir, ticketsPath) => join(dir, suggestEvalName(ticketsPath))
 
 const isEvalName = (name) => name.endsWith('.qval.json')
 
@@ -102,63 +111,63 @@ async function isTicketsFile(path) {
   return raw != null && !looksLikeEvalFile(raw) && parseTicketsFile(raw) != null
 }
 
-/** Candidate tickets files in `dir`, `tickets.json` first because that is what Qbort writes. */
+/**
+ * Candidate tickets files in `dir` and in the `qbort-output/` below it, `tickets.json` first because
+ * that is what a hand-placed file is usually called. Both places are scanned because Qbort writes to
+ * the subdirectory and the person is standing in the parent.
+ */
 async function ticketsFilesIn(dir) {
-  let names
-  try {
-    names = readdirSync(dir).filter((n) => n.endsWith('.json') && !isEvalName(n))
-  } catch {
-    return []
-  }
-  names.sort((a, b) => (a === 'tickets.json' ? -1 : b === 'tickets.json' ? 1 : a.localeCompare(b)))
   const found = []
-  for (const n of names) {
-    if (await isTicketsFile(join(dir, n))) found.push(join(dir, n))
+  for (const d of [dir, join(dir, QBORT_OUTPUT_DIR)]) {
+    let names
+    try {
+      names = readdirSync(d).filter((n) => n.endsWith('.json') && !isEvalName(n))
+    } catch {
+      continue // no such directory, which is the normal case for the Qbort one
+    }
+    names.sort((a, b) => (a === 'tickets.json' ? -1 : b === 'tickets.json' ? 1 : a.localeCompare(b)))
+    for (const n of names) {
+      if (await isTicketsFile(join(d, n))) found.push(join(d, n))
+    }
   }
   return found
 }
 
-/**
- * The dataset an eval file was most likely built from: the one tickets file sitting next to it. An
- * eval file references its dataset by fingerprint rather than by path, so it has to be relinked to
- * real tickets before anything can be reviewed, and after `/qval:evaluate-tickets` the only thing
- * that knows where they are is the directory. Returns null when the answer isn't unambiguous, in
- * which case the relink falls back to `lastDatasetPath` and then fails with a readable message.
- *
- * A wrong guess cannot mislink: `Workspace.open` gates the file it is handed on the fingerprint.
- */
-async function siblingTickets(dir) {
-  const found = await ticketsFilesIn(dir)
-  return found.length === 1 ? found[0] : null
-}
+/** Paths as the person typed them, for a list they have to choose from. */
+const forDisplay = (dir, paths) => paths.map((p) => `  ${relative(dir, p) || basename(p)}`)
 
 /**
  * Work out what to open, from an explicit argument or by looking around the directory. Returns
- * `{ evalPath, ticketsPath }` — `evalPath` may not exist yet, in which case the child creates it.
+ * `{ evalPath, ticketsPaths }` — `evalPath` may not exist yet, in which case the child creates it.
  *
  * This runs in the parent on purpose: an ambiguous directory is the most likely failure, and it
  * should come back as an exit code with a list, not as a line in a detached process's log.
+ *
+ * For an **eval file** the candidates are handed over as a list rather than resolved to one. An eval
+ * file names its dataset by fingerprint, so the relink can try each in turn and a wrong guess cannot
+ * mislink. Several ticket files in a directory is the normal case now that Qbort keeps every run,
+ * and refusing to relink there would break re-opening a review for no reason.
  */
 async function resolveTarget(target, dir) {
   if (target) {
     const path = resolve(target)
     if (!existsSync(path)) fail(`MISSING_FILE ${path}`)
-    if (isEvalName(path)) return { evalPath: path, ticketsPath: await siblingTickets(dirname(path)) }
+    if (isEvalName(path)) return { evalPath: path, ticketsPaths: await ticketsFilesIn(dirname(path)) }
     if (!(await isTicketsFile(path))) {
       fail(
         `BAD_TICKETS ${path}`,
         '  Not a tickets.json (Qbort\'s shape) and not a *.qval.json eval file.'
       )
     }
-    return { evalPath: defaultEvalPath(path), ticketsPath: path }
+    return { evalPath: defaultEvalPath(dir, path), ticketsPaths: [path] }
   }
 
   const evals = evalFilesIn(dir)
-  if (evals.length === 1) return { evalPath: evals[0], ticketsPath: await siblingTickets(dir) }
+  if (evals.length === 1) return { evalPath: evals[0], ticketsPaths: await ticketsFilesIn(dir) }
   if (evals.length > 1) {
     fail(
       `AMBIGUOUS ${evals.length} eval files in ${dir}`,
-      ...evals.map((p) => `  ${basename(p)}`),
+      ...forDisplay(dir, evals),
       '  Pass the one to review: `qval serve <file>.qval.json`.'
     )
   }
@@ -167,17 +176,20 @@ async function resolveTarget(target, dir) {
   if (tickets.length === 0) {
     fail(
       `NO_DATASET ${dir}`,
-      '  Nothing here looks like a tickets.json or a *.qval.json eval file.'
+      '  Nothing here looks like a tickets.json or a *.qval.json eval file.',
+      `  Qbort's own output is looked for in ./${QBORT_OUTPUT_DIR}/ as well.`
     )
   }
+  // Starting a *new* evaluation is the one case with nothing to disambiguate on, so several
+  // datasets have to be put to the user. Qbort leaves one file per run, so this is routine.
   if (tickets.length > 1) {
     fail(
       `AMBIGUOUS ${tickets.length} ticket files in ${dir}`,
-      ...tickets.map((p) => `  ${basename(p)}`),
+      ...forDisplay(dir, tickets),
       '  Pass the one to review: `qval serve <file>.json`.'
     )
   }
-  return { evalPath: defaultEvalPath(tickets[0]), ticketsPath: tickets[0] }
+  return { evalPath: defaultEvalPath(dir, tickets[0]), ticketsPaths: [tickets[0]] }
 }
 
 /**
@@ -276,7 +288,7 @@ async function cmdServe(args) {
     return
   }
 
-  const { evalPath, ticketsPath } = await resolveTarget(args._[0], dir)
+  const { evalPath, ticketsPaths } = await resolveTarget(args._[0], dir)
   const candidates = resolveCandidates(args, dir, evalPath)
 
   const port = flagValue(args, 'port')
@@ -300,7 +312,7 @@ async function cmdServe(args) {
     '--dir',
     dir
   ]
-  if (ticketsPath) childArgs.push('--tickets', ticketsPath)
+  if (ticketsPaths.length) childArgs.push('--tickets', ticketsPaths.join(','))
   if (candidates.length) childArgs.push('--compare', candidates.map((c) => c.path).join(','))
   if (port !== null) childArgs.push('--port', port)
   if (args['no-open']) childArgs.push('--no-open')
@@ -382,7 +394,7 @@ async function cmdServeChild(args) {
   const recordPath = join(outDir, SESSION_FILE)
   const dir = flagValue(args, 'dir') ?? process.cwd()
   const evalPath = flagValue(args, 'eval-file')
-  const ticketsPath = flagValue(args, 'tickets')
+  const ticketsPaths = (flagValue(args, 'tickets') ?? '').split(',').filter(Boolean)
   const comparePaths = (flagValue(args, 'compare') ?? '').split(',').filter(Boolean)
 
   const base = {
@@ -392,7 +404,9 @@ async function cmdServeChild(args) {
     startedAt: nowIso(),
     endedAt: null,
     workingPath: evalPath,
-    datasetPath: ticketsPath,
+    // A guess until the open resolves it, since an eval file may be given several candidates and
+    // only the fingerprint says which one it is. Overwritten below with the one actually loaded.
+    datasetPath: ticketsPaths[0] ?? null,
     candidates: comparePaths.map((p) => basename(p))
   }
 
@@ -415,14 +429,17 @@ async function cmdServeChild(args) {
     }
 
     if (existsSync(evalPath)) {
-      // Resuming: the file's own config snapshot wins, and its dataset is relinked by fingerprint.
-      await workspace.open(evalPath, async () => ticketsPath)
+      // Resuming: the file's own config snapshot wins, and its dataset is relinked by fingerprint,
+      // which is what picks the right one out of the candidates the parent found.
+      await workspace.open(evalPath, async () => ticketsPaths)
     } else {
-      if (!ticketsPath) throw new Error(`${evalPath} does not exist and no tickets file was given.`)
+      // A new evaluation, so the parent has already refused anything but a single dataset.
+      if (!ticketsPaths.length) throw new Error(`${evalPath} does not exist and no tickets file was given.`)
       await seedConfigFromEngineFiles(settings, dir)
-      await workspace.open(ticketsPath)
+      await workspace.open(ticketsPaths[0])
       await workspace.save(evalPath)
     }
+    base.datasetPath = (await settings.get()).lastDatasetPath ?? base.datasetPath
     workspace.setComparisonSources(
       comparePaths.map((path, i) => ({ id: `c${i + 1}`, name: basename(path), path }))
     )

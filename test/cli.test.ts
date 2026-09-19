@@ -11,7 +11,7 @@
 import { spawnSync } from 'node:child_process'
 import { promises as fs, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { readJson } from '@lib/fsUtil.mjs'
@@ -34,6 +34,7 @@ interface SessionRecord {
   port: number | null
   opened: boolean | null
   workingPath: string
+  datasetPath: string | null
   candidates: string[]
   error: string | null
 }
@@ -63,13 +64,32 @@ afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true })
 })
 
-/** A working directory holding a tickets.json, plus whatever else the case needs. */
+/**
+ * A working directory holding a tickets.json, plus whatever else the case needs. A key with a `/`
+ * in it is written into the subdirectory, which is how the Qbort layout is built.
+ */
 async function home(name: string, files: Record<string, unknown> = {}) {
   const path = join(dir, name)
   await fs.mkdir(path, { recursive: true })
   writeFileSync(join(path, 'tickets.json'), JSON.stringify(TICKETS, null, 2))
   for (const [file, value] of Object.entries(files)) {
+    await fs.mkdir(dirname(join(path, file)), { recursive: true })
     writeFileSync(join(path, file), typeof value === 'string' ? value : JSON.stringify(value, null, 2))
+  }
+  return path
+}
+
+/**
+ * What Qbort leaves behind: no `tickets.json` in the working directory at all, and one timestamped
+ * file per run under `qbort-output/`. `runs` are distinct datasets, one per subject suffix.
+ */
+async function qbortHome(name: string, stamps: string[]) {
+  const path = await home(name)
+  await fs.rm(join(path, 'tickets.json'))
+  await fs.mkdir(join(path, 'qbort-output'), { recursive: true })
+  for (const stamp of stamps) {
+    const tickets = TICKETS.map((t) => ({ ...t, subject: `${t.subject} (${stamp})` }))
+    writeFileSync(join(path, 'qbort-output', `tickets-${stamp}.json`), JSON.stringify({ meta: { provider: 'claude-skill' }, tickets }, null, 2))
   }
   return path
 }
@@ -111,7 +131,7 @@ async function post(url: string, path: string, body: unknown = {}) {
 // --- Resolving what to open --------------------------------------------------
 
 describe('serve: what it opens', () => {
-  it('finds the only tickets.json, creates the eval file beside it, and serves detached', async () => {
+  it('finds the only tickets.json, creates the eval file in the working dir, and serves detached', async () => {
     const cwd = await home('one')
     const res = qval(cwd, ['serve', '--no-open'])
 
@@ -179,6 +199,53 @@ describe('serve: what it opens', () => {
     expect(res.err).toMatch(/^AMBIGUOUS 2 eval files/)
     expect(res.err).toContain('a.qval.json')
     expect(res.err).toContain('b.qval.json')
+  })
+
+  it('finds the dataset Qbort left in qbort-output/, and keeps the eval file in the working dir', async () => {
+    // Qbort stopped writing a tickets.json beside the working directory: every run lands in
+    // `qbort-output/` under a timestamped name. Scanning only the working directory finds nothing.
+    const cwd = await qbortHome('qbort-one', ['20260918-221724'])
+    const res = qval(cwd, ['serve', '--no-open'])
+
+    expect(res.out.split('\n')[0]).toBe('SERVING')
+    expect(field(res.out, 'DATASET')).toBe(join(cwd, 'qbort-output', 'tickets-20260918-221724.json'))
+    // Not beside the dataset: the engine writes its eval file in the working directory too, and the
+    // merge-candidate scan only looks there.
+    expect(field(res.out, 'WORKING_FILE')).toBe(join(cwd, 'tickets-20260918-221724.qval.json'))
+  })
+
+  it('lists several Qbort runs rather than guessing which one to start on', async () => {
+    const cwd = await qbortHome('qbort-many', ['20260918-152126', '20260918-221724'])
+    const res = qval(cwd, ['serve', '--no-open'])
+
+    expect(res.status).toBe(2)
+    expect(res.err).toMatch(/^AMBIGUOUS 2 ticket files/)
+    // Relative, so the user can paste a listed line straight back into the command.
+    expect(res.err).toContain('  qbort-output/tickets-20260918-152126.json')
+    expect(res.err).toContain('  qbort-output/tickets-20260918-221724.json')
+
+    const pick = qval(cwd, ['serve', 'qbort-output/tickets-20260918-152126.json', '--no-open'])
+    expect(pick.out.split('\n')[0]).toBe('SERVING')
+    expect(field(pick.out, 'DATASET')).toBe(join(cwd, 'qbort-output', 'tickets-20260918-152126.json'))
+  })
+
+  it('relinks an eval file by fingerprint when several Qbort runs are candidates', async () => {
+    // Resuming a review: the directory is ambiguous by name, but an eval file names its dataset by
+    // fingerprint, so there is nothing to ask about. Refusing here would break every second visit.
+    const source = await qbortHome('qbort-produced', ['20260918-152126'])
+    qval(source, ['serve', '--no-open'])
+    await post((await readRecord(source))!.url!, '/api/done')
+
+    const cwd = await qbortHome('qbort-resume', ['20260918-152126', '20260918-221724'])
+    writeFileSync(
+      join(cwd, 'tickets-20260918-152126.qval.json'),
+      readFileSync(join(source, 'tickets-20260918-152126.qval.json'))
+    )
+    const res = qval(cwd, ['serve', '--no-open'])
+
+    expect(res.out.split('\n')[0]).toBe('SERVING')
+    expect(field(res.out, 'DATASET')).toBe(join(cwd, 'qbort-output', 'tickets-20260918-152126.json'))
+    expect((await readRecord(cwd))!.datasetPath).toBe(join(cwd, 'qbort-output', 'tickets-20260918-152126.json'))
   })
 
   it('refuses a directory with nothing to review', async () => {
