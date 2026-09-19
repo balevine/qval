@@ -7,7 +7,7 @@ import { useSession } from '@/state/SessionContext'
  * Who you are when your scores are saved, plus where they are going.
  *
  * The folder picker is gone with the native dialogs: the CLI resolves both files before the browser
- * exists (spec §19), so the only thing left to choose here is the display name, and the paths are
+ * exists, so the only thing left to choose here is the display name, and the paths are
  * shown rather than set.
  */
 export function StorageSettings() {

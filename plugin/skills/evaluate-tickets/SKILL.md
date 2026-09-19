@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # evaluate-tickets
 
-Scores a `tickets.json` (Qbort's output shape, or any file matching it) and writes a Qval eval file (`*.qval.json`). The **ambient Claude model** (via subagents) supplies the *judgment*. A deterministic Node engine (`engine.mjs`) owns everything structural: config validation, both fingerprints, target selection, batching, prompt compilation, per-value validation and repair, retry accounting, and the atomic eval-file writes. Never hand those structural jobs to the model.
+Scores a ticket file and writes a Qval eval file (`*.qval.json`). The **ambient Claude model** (via subagents) supplies the *judgment*. A deterministic Node engine (`engine.mjs`) owns everything structural: config validation, both fingerprints, target selection, batching, prompt compilation, per-value validation and repair, retry accounting, and the atomic eval-file writes. Never hand those structural jobs to the model.
 
 The engine lives next to this file, at `engine.mjs`. Let `ENGINE` be its absolute path, which is `${CLAUDE_PLUGIN_ROOT}/skills/evaluate-tickets/engine.mjs`. Run all `node "$ENGINE" ...` commands from the user's working directory. Scratch state goes to `.qval-run/` (the engine's `--out` default). The eval file itself is written **outside** it, in the working directory, because that is the durable artifact the user opens for review.
 
@@ -14,11 +14,15 @@ The engine lives next to this file, at `engine.mjs`. Let `ENGINE` be its absolut
 
 ## Step 1. Locate the tickets file
 
-Find the dataset to evaluate (a path the user gave, else `ls *.json qbort-output/*.json`). It is a tickets file in Qbort's shape: either `{ meta, tickets: [...] }` or a bare array of tickets. Anything matching that shape works, whoever produced it. Only an integer `id` per ticket is required; `subject`, `status`, and `messages` are coerced when absent, and `meta` is optional (it is dropped before fingerprinting).
+Find the dataset to evaluate: a path the user gave, else `ls *.json qbort-output/*.json`.
 
-**Qbort writes to `qbort-output/`**, one timestamped `tickets-YYYYMMDD-HHMMSS.json` per run, and never overwrites an earlier one. So look there as well as in the working directory, and expect to find several.
+A ticket file is either `{ meta, tickets: [...] }` or a bare array of tickets, where a ticket is `{ id, subject, status, messages: [{ from: { name, email }, body, isStaff, createdAt }] }`. Only an integer `id` is required; `subject`, `status`, and `messages` are filled in when absent, unknown fields are ignored, and `meta` is optional (it is dropped before fingerprinting).
 
-If more than one candidate exists and the user didn't name one, **ask with `AskUserQuestion`** — the newest is a reasonable thing to offer first, not a safe thing to assume. Evaluating the wrong dataset produces a file that will never merge with anyone else's.
+**The filename means nothing** — identify a candidate by opening it and checking the shape, not by its name. Plenty of users hand-export their own ticket set from a real helpdesk, so expect names like `zendesk-q3.json` or `support-export.json` as readily as `tickets.json`. `qbort-output/` is worth a look because [Qbort](https://github.com/balevine/qbort) writes one timestamped run per file there, but most datasets are simply sitting in the working directory.
+
+If more than one candidate exists and the user didn't name one, **ask with `AskUserQuestion`** — for Qbort output the newest is a reasonable thing to offer first, but not a safe thing to assume. Evaluating the wrong dataset produces a file that will never merge with anyone else's.
+
+If you find **nothing**, say so and ask the user for a path rather than guessing. A dataset elsewhere on disk is fine: `plan --tickets` takes any path.
 
 ## Step 2. Ensure the config files exist
 
@@ -124,7 +128,7 @@ It prints `ASSEMBLED`, then `EVALUATED`, `DROPPED`, `FAILED`, **`NEEDS_RETRY`**,
   node "$ENGINE" assemble --round 1
   ```
 
-  Round 1 always prints `NEEDS_RETRY 0`, since the retry is capped at one round (spec §6). Anything still unresolved is printed on a **`RESIDUAL n`** line instead. **Do not loop.** Report the residual; a genuinely unscoreable ticket stays in the file as an error, and the user can re-plan with `--mode remaining` later if they want.
+  Round 1 always prints `NEEDS_RETRY 0`, since the retry is capped at one round. Anything still unresolved is printed on a **`RESIDUAL n`** line instead. **Do not loop.** Report the residual; a genuinely unscoreable ticket stays in the file as an error, and the user can re-plan with `--mode remaining` later if they want.
 
 Failures here: `STALE_FILE` (exit 2) means the eval file changed on disk since `plan` (a review session probably has it open). Tell the user to close it there, then re-run `plan`. `NOT_ASSEMBLED` means round 0 hasn't been assembled yet. `RETRY_CAPPED` means you passed a round other than 1.
 

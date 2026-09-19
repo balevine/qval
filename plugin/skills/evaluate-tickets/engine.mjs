@@ -60,7 +60,7 @@ const DEFAULT_RULES_FILE = 'EVAL_RULES.md'
 const DEFAULT_SCHEMA_FILE = 'EVAL_SCHEMA.json'
 const DEFAULT_OUT_DIR = '.qval-run'
 const RUN_CONTEXT_FILE = 'run-context.json'
-/** Recorded on the evaluator: what produced these scores (spec §5). */
+/** Recorded on the evaluator: what produced these scores. */
 const PROVIDER = 'claude-code'
 /** Cosmetic `meta.appVersion`. The skill folder is copyable, so it can't read the repo's package.json. */
 const APP_VERSION = '0.2.0'
@@ -442,7 +442,7 @@ async function cmdPlan(args) {
         `  SCHEMA ${schemaPath}`
       )
     }
-    // One model scores every ticket in a file (spec §3/§4), and it fires on the same signal the
+    // One model scores every ticket in a file, and it fires on the same signal the
     // config lock does: a scored `llm` evaluator.
     const locked = lockedLlmProvider(file)
     if (locked && locked.provider !== PROVIDER) {
@@ -596,7 +596,7 @@ async function cmdAssemble(args) {
   }
 
   // A retry round merges against the snapshot taken before it ran: a value that validated on
-  // either attempt wins, so a worse retry never erases a good first-pass value (spec §6).
+  // either attempt wins, so a worse retry never erases a good first-pass value.
   const previous = manifest.previous ?? null
   const merged = previous
     ? results.map((r) => {
@@ -641,7 +641,7 @@ async function cmdRetry(args) {
   if (round !== 1) {
     fail(
       `RETRY_CAPPED --round ${roundFlag}`,
-      '  A run gets exactly one automatic validation retry (--round 1), by design (spec §6).',
+      '  A run gets exactly one automatic validation retry (--round 1), by design.',
       '  Residual failures stay in the file as errors/issues; re-plan with --mode remaining to try again.'
     )
   }

@@ -1,4 +1,4 @@
-// Compiles the evaluation prompt (spec §6): system + rules + a machine-readable schema spec + an
+// Compiles the evaluation prompt: system + rules + a machine-readable schema spec + an
 // explicit JSON output contract, followed by the batch's rendered tickets. The **static prefix**
 // (rules + schema + contract) is identical across batches so it can be prompt-cached. Only the
 // **dynamic suffix** (the tickets) varies.

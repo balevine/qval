@@ -2,7 +2,7 @@
 // stale or hand-edited settings file never hard-fails, it just falls back field by field.
 //
 // There is no provider config here. The LLM evaluation runs inside Claude Code with the ambient
-// model (spec §5/§18), so there is no key, host, model, or parallelism for a user to set.
+// model, so there is no key, host, model, or parallelism for a user to set.
 
 import { DEFAULT_SCHEMA, normalizeSchema } from './schema.mjs'
 import { DEFAULT_RULES, normalizeRules } from './rules.mjs'

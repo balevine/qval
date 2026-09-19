@@ -2,11 +2,10 @@
  * Shared types used by the renderer, the main process, and the review server.
  *
  * This file is the single source of truth for the host contract and the persisted data model.
- * See `.plans/PROJECT_SPEC.md` for the full design. Phases add to it incrementally; the ticket /
- * eval-file / aggregate types arrive with their phases.
+ * `README.md` describes what the application does with them.
  */
 
-// --- Eval schema (the user-defined output properties, spec §2.2) -------------
+// --- Eval schema (the user-defined output properties) ------------------------
 
 /** Base value type of an output property. `multiple` (below) turns any of these into an array. */
 export type PropertyType = 'score' | 'boolean' | 'enum' | 'text'
@@ -38,12 +37,12 @@ export type EvalSchema = EvalProperty[]
 /** Free-form evaluation context (prose, definitions, and/or a criteria list). */
 export type Rules = string
 
-// --- Tickets (the imported dataset, from Qbort — spec §2.1) ------------------
+// --- Tickets (the imported dataset, read-only) -------------------------------
 
 export const TICKET_STATUSES = ['new', 'open', 'pending', 'on-hold', 'solved', 'closed'] as const
 export type TicketStatus = (typeof TICKET_STATUSES)[number]
 
-/** Author of a message. Staff authors are on the company.biz domain (Qbort's convention). */
+/** Author of a message. Whether they are staff is carried by `isStaff`, never inferred from here. */
 export interface TicketAuthor {
   name: string
   email: string
@@ -58,7 +57,7 @@ export interface TicketMessage {
   createdAt: string
 }
 
-/** A support ticket under evaluation. Qval consumes Qbort's shape and never mutates it. */
+/** A support ticket under evaluation. Qval reads this and never mutates the imported dataset. */
 export interface Ticket {
   id: number
   subject: string
@@ -66,7 +65,7 @@ export interface Ticket {
   messages: TicketMessage[]
 }
 
-// --- Eval file (`*.qval.json`, spec §2.4) ------------------------------------
+// --- Eval file (`*.qval.json`) -----------------------------------------------
 
 export type EvaluatorKind = 'llm' | 'human'
 
@@ -76,7 +75,7 @@ export type EvalValue = number | boolean | string | number[] | string[]
 /** The per-ticket values map (partial: a missing key = "that property not scored"). */
 export type EvalValues = Partial<Record<string, EvalValue>>
 
-/** Non-silent repair trail: what validation coerced or dropped for a value (spec §2.4/§6). */
+/** Non-silent repair trail: what validation coerced or dropped for a value. */
 export interface EvalIssue {
   key: string
   action: 'clamped' | 'coerced' | 'dropped'
@@ -109,7 +108,7 @@ export interface Evaluator {
   results: EvalResult[]
 }
 
-/** The dataset an eval file references (by fingerprint — tickets are not embedded, spec §10). */
+/** The dataset an eval file references (by fingerprint — tickets are not embedded). */
 export interface DatasetRef {
   fingerprint: string
   ticketCount: number
@@ -140,7 +139,7 @@ export interface EvalFile {
 
 /** A read-only comparison eval file added via MERGE (its evaluators are pooled into aggregates). */
 export interface ComparisonFile {
-  /** Stable id. Opaque to the UI: the host maps it back to a file (spec §19). */
+  /** Stable id. Opaque to the UI: the host maps it back to a file. */
   id: string
   /** Display label (filename). */
   name: string
@@ -149,7 +148,7 @@ export interface ComparisonFile {
 
 /**
  * A file the host found and is willing to merge, offered to the UI by name only. The path stays
- * host-side, which is what lets MERGE work in a browser without any endpoint accepting one (§19).
+ * host-side, which is what lets MERGE work in a browser without any endpoint accepting one.
  */
 export interface ComparisonCandidate {
   id: string
@@ -164,13 +163,13 @@ export interface SessionSnapshot {
   workingFile: EvalFile
   /** Path the working file was opened from / last saved to; null when unsaved. */
   workingPath: string | null
-  /** Read-only files added via MERGE, pooled into the aggregates/comparison (spec §8). */
+  /** Read-only files added via MERGE, pooled into the aggregates/comparison. */
   comparisons: ComparisonFile[]
   /** Mergeable files the host located, merged or not. Empty when the host offers none. */
   candidates: ComparisonCandidate[]
 }
 
-// --- Aggregates & comparison (derived at merge time — spec §2.6) --------------
+// --- Aggregates & comparison (derived at merge time) -------------------------
 
 /** Per ticket, per property, per stream: the pooled result of all evaluators of that kind. */
 export type PropertyAggregate =
@@ -211,11 +210,11 @@ export interface AggregateResult {
 
 /**
  * The full persisted settings document. There are no secrets in it and no provider config either:
- * the LLM evaluation runs inside Claude Code with the ambient model (spec §5/§18), so there is no
+ * the LLM evaluation runs inside Claude Code with the ambient model, so there is no
  * key to store and no model to pick here.
  */
 export interface Settings {
-  /** Display name stamped on the human evaluator (spec §2.4). */
+  /** Display name stamped on the human evaluator. */
   evaluatorName: string
   /** Working output schema; snapshotted into each eval file. */
   schema: EvalSchema
@@ -224,7 +223,7 @@ export interface Settings {
   /** Path of the tickets file backing the working file. It is how an eval file relinks its dataset
    *  without being handed one, and it is not part of any eval file (which references the dataset by
    *  fingerprint). There is no `defaultDir` and no last-file pointer: the host binds every path from
-   *  argv before the browser exists (spec §19), so there is nothing for settings to remember. */
+   *  argv before the browser exists, so there is nothing for settings to remember. */
   lastDatasetPath: string | null
 }
 
@@ -237,7 +236,7 @@ export interface Settings {
  *
  * **Nothing here takes or returns a path the UI chose.** The host resolves every file before the
  * browser exists, so opening, merging, and exporting are all named by id or by nothing at all
- * (spec §19). That is why there is no `open` and no directory picker.
+ *. That is why there is no `open` and no directory picker.
  */
 export interface IpcApi {
   app: {
@@ -252,7 +251,7 @@ export interface IpcApi {
     loadLast: () => Promise<SessionSnapshot | null>
     /** The path the working file is bound to. The host persists on every mutation. */
     save: () => Promise<string | null>
-    /** MERGE a candidate by id; throws with a reason on a fingerprint mismatch (spec §8). */
+    /** MERGE a candidate by id; throws with a reason on a fingerprint mismatch. */
     mergeComparison: (id: string) => Promise<SessionSnapshot | null>
     /** Un-merge a comparison by id; returns the updated session. */
     unmergeComparison: (id: string) => Promise<SessionSnapshot | null>
@@ -264,7 +263,7 @@ export interface IpcApi {
     setValues: (ticketId: number, values: EvalValues) => Promise<void>
   }
   review: {
-    /** End the review session: the host stops serving and records the run as finished (spec §19). */
+    /** End the review session: the host stops serving and records the run as finished. */
     done: () => Promise<void>
   }
 }

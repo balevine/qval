@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 
 /**
  * Neo-brutalist banner shown atop a Settings section that is frozen because the working file
- * already has scores (its config/model is pinned to keep the eval file honest — spec §3/§4).
+ * already has scores (its config/model is pinned to keep the eval file honest).
  */
 export function LockNotice({ children }: { children: ReactNode }) {
   return (

@@ -21,7 +21,7 @@ interface TicketDetailModalProps {
 }
 
 /**
- * The conversation + human-eval form for one ticket (spec §7/§9.2). Human edits are applied to the
+ * The conversation + human-eval form for one ticket. Human edits are applied to the
  * session optimistically and persisted host-side; prev/next/next-unevaluated sweep the queue.
  */
 export function TicketDetailModal({ tickets, index, onIndexChange }: TicketDetailModalProps) {

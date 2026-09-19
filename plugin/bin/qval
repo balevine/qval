@@ -2,7 +2,7 @@
 // The Qval CLI. Two subcommands, both of them the plumbing behind a skill:
 //
 //   serve  [<file>] [--compare a.qval.json,b.qval.json] [--port N] [--no-open] [--out .qval-run]
-//          Resolve the dataset and the eval file, start the review server (spec §19) **detached**,
+//          Resolve the dataset and the eval file, start the review server **detached**,
 //          open a browser at it, and return immediately with the URL. Scoring 200 tickets by hand
 //          takes an hour and no Bash timeout survives that, so `serve` must not block.
 //
@@ -40,14 +40,16 @@ const EXIT = { OK: 0, USAGE: 1, INPUT: 2 }
 const DEFAULT_OUT_DIR = '.qval-run'
 const SESSION_FILE = 'review-session.json'
 /** The engine's config files. `serve` reads them in and writes them back, so both halves of Qval
- *  score against the same schema and rules (spec §18/§19). */
+ *  score against the same schema and rules. */
 const RULES_FILE = 'EVAL_RULES.md'
 const SCHEMA_FILE = 'EVAL_SCHEMA.json'
 /** Cosmetic `meta.appVersion`, matching the engine's. */
 const APP_VERSION = '0.2.0'
-/** Where Qbort puts its finished ticket files, one timestamped file per run. It stopped writing a
- *  `tickets.json` beside the working directory, so scanning only the working directory would find
- *  nothing at all in the ordinary case of "I just generated a set, now score it". */
+/** One extra directory to look in, because Qbort (the sibling generator) puts its finished ticket
+ *  files there, one timestamped file per run, and making people move it by hand would be a chore.
+ *  A convenience for one known producer and nothing more: a ticket file is identified by its shape,
+ *  most datasets are hand-exported and sit in the working directory, and this directory not
+ *  existing is the common case rather than a problem. */
 const QBORT_OUTPUT_DIR = 'qbort-output'
 
 /** How long the parent waits for the child to publish a live session record. */
@@ -85,9 +87,9 @@ const sessionFileOf = (args) => join(outDirOf(args), SESSION_FILE)
 
 /**
  * `<stem>.qval.json` in the working directory, which is where `evaluate-tickets`'s engine puts it
- * too. The eval file deliberately does not follow the dataset into a subdirectory: Qbort's tickets
- * live under `qbort-output/` now, and an eval file written there would be a second, invisible copy
- * of the one the engine writes, and would not be found by the merge-candidate scan either.
+ * too. The eval file deliberately does not follow the dataset wherever it happens to live: written
+ * next to a dataset in some subdirectory it would be a second, invisible copy of the one the engine
+ * writes, and would not be found by the merge-candidate scan either.
  */
 const defaultEvalPath = (dir, ticketsPath) => join(dir, suggestEvalName(ticketsPath))
 
@@ -105,16 +107,19 @@ function evalFilesIn(dir) {
   }
 }
 
-/** Does this file parse as a tickets.json (Qbort's shape, or anything matching it)? */
+/** Does this file parse as ticket data? Content, never the filename, is what decides. */
 async function isTicketsFile(path) {
   const raw = await readJson(path)
   return raw != null && !looksLikeEvalFile(raw) && parseTicketsFile(raw) != null
 }
 
 /**
- * Candidate tickets files in `dir` and in the `qbort-output/` below it, `tickets.json` first because
- * that is what a hand-placed file is usually called. Both places are scanned because Qbort writes to
- * the subdirectory and the person is standing in the parent.
+ * Candidate ticket files in `dir` and in the `qbort-output/` below it.
+ *
+ * Every `.json` is opened and kept on the strength of what is inside it. Matching on the name would
+ * be cheaper and would be wrong: most people bring their own export, named after wherever it came
+ * from, and a scan that only recognized `tickets.json` would turn a tolerated input into a required
+ * convention. The name is used only to order the results, so the conventional one is offered first.
  */
 async function ticketsFilesIn(dir) {
   const found = []
@@ -123,7 +128,7 @@ async function ticketsFilesIn(dir) {
     try {
       names = readdirSync(d).filter((n) => n.endsWith('.json') && !isEvalName(n))
     } catch {
-      continue // no such directory, which is the normal case for the Qbort one
+      continue // no such directory, which is the normal case for the optional one
     }
     names.sort((a, b) => (a === 'tickets.json' ? -1 : b === 'tickets.json' ? 1 : a.localeCompare(b)))
     for (const n of names) {
@@ -145,8 +150,8 @@ const forDisplay = (dir, paths) => paths.map((p) => `  ${relative(dir, p) || bas
  *
  * For an **eval file** the candidates are handed over as a list rather than resolved to one. An eval
  * file names its dataset by fingerprint, so the relink can try each in turn and a wrong guess cannot
- * mislink. Several ticket files in a directory is the normal case now that Qbort keeps every run,
- * and refusing to relink there would break re-opening a review for no reason.
+ * mislink. Several ticket files in one directory is ordinary (accumulated exports, or one file per
+ * generated run), and refusing to relink there would break re-opening a review for no reason.
  */
 async function resolveTarget(target, dir) {
   if (target) {
@@ -156,7 +161,8 @@ async function resolveTarget(target, dir) {
     if (!(await isTicketsFile(path))) {
       fail(
         `BAD_TICKETS ${path}`,
-        '  Not a tickets.json (Qbort\'s shape) and not a *.qval.json eval file.'
+        '  Not ticket data and not a *.qval.json eval file.',
+        '  Expected `{ meta, tickets: [...] }` or a bare array, each ticket with an integer `id`.'
       )
     }
     return { evalPath: defaultEvalPath(dir, path), ticketsPaths: [path] }
@@ -176,12 +182,14 @@ async function resolveTarget(target, dir) {
   if (tickets.length === 0) {
     fail(
       `NO_DATASET ${dir}`,
-      '  Nothing here looks like a tickets.json or a *.qval.json eval file.',
-      `  Qbort's own output is looked for in ./${QBORT_OUTPUT_DIR}/ as well.`
+      `  No .json here (or in ./${QBORT_OUTPUT_DIR}/) holds ticket data, and there is no *.qval.json either.`,
+      '  Pass the path to your ticket file: `qval serve <path>`. It can live anywhere.',
+      '  Ticket data is `{ meta, tickets: [...] }` or a bare array, each ticket with an integer `id`.'
     )
   }
   // Starting a *new* evaluation is the one case with nothing to disambiguate on, so several
-  // datasets have to be put to the user. Qbort leaves one file per run, so this is routine.
+  // datasets have to be put to the user. Accumulated exports and per-run generated files both
+  // land here, so this is routine rather than a sign something is wrong.
   if (tickets.length > 1) {
     fail(
       `AMBIGUOUS ${tickets.length} ticket files in ${dir}`,
@@ -194,7 +202,7 @@ async function resolveTarget(target, dir) {
 
 /**
  * The files on offer to MERGE: every other `*.qval.json` next to the working file, plus anything
- * named with `--compare`. The browser is shown the ids and names only (spec §19).
+ * named with `--compare`. The browser is shown the ids and names only.
  */
 function resolveCandidates(args, dir, evalPath) {
   const explicit = (flagValue(args, 'compare') ?? '')
@@ -215,7 +223,7 @@ function resolveCandidates(args, dir, evalPath) {
  * Seed the working schema and rules from `EVAL_SCHEMA.json` / `EVAL_RULES.md` when they exist, so a
  * review opened on a bare tickets.json starts from the same config `/qval:evaluate-tickets` would
  * use. Without this the two halves of Qval quietly disagree and the eval files stop merging.
- * Skipped for an eval file, which carries its own authoritative config snapshot (spec §3).
+ * Skipped for an eval file, which carries its own authoritative config snapshot.
  */
 async function seedConfigFromEngineFiles(settings, dir) {
   const patch = {}

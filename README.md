@@ -1,6 +1,6 @@
 # Qval
 
-A local-first **Claude Code plugin** for evaluating customer-support tickets with an LLM, with humans, and then comparing the two. Qval is the companion to [Qbort](https://github.com/balevine/qbort). Qbort *generates* a `tickets.json`, Qval *scores* it.
+A local-first **Claude Code plugin** for evaluating customer-support tickets with an LLM, with humans, and then comparing the two. It scores any ticket set in [the ticket format](#the-ticket-format), whether you exported it from your own helpdesk or generated it with [Qbort](https://github.com/balevine/qbort), Qval's sibling tool for making realistic fake ones.
 
 It is two commands. `/qval:evaluate-tickets` runs the LLM evaluation inside Claude Code on whatever model your session is using. `/qval:review` opens a browser tab for the parts a person has to do by hand, which are writing the schema and the rules, filling in the human evaluation ticket by ticket, and reading the comparison. Both halves read and write the same `*.qval.json`, and two people's files of the same ticket set **merge** into per-ticket means, distributions, and a human-vs-LLM comparison.
 
@@ -44,13 +44,35 @@ Both skills set `disable-model-invocation: true`, so they cost nothing in your c
 
 ---
 
+## The ticket format
+
+A ticket file is JSON: either `{ meta, tickets: [...] }` or a bare array of tickets. `meta` is optional and only ever displayed. Each ticket is
+
+```json
+{
+  "id": 1,
+  "subject": "Refund not received",
+  "status": "open",
+  "messages": [
+    {
+      "from": { "name": "Dana Okonkwo", "email": "dana@example.com" },
+      "body": "I returned the order two weeks ago and haven't seen the refund.",
+      "isStaff": false,
+      "createdAt": "2026-09-01T10:00:00Z"
+    }
+  ]
+}
+```
+
+Only the integer `id` is required, and it only has to be unique within the file. Everything else is filled in when it's missing, so a thin export still works: `status` falls back to `open` (the recognized values are `new`, `open`, `pending`, `on-hold`, `solved`, `closed`), and absent text becomes empty. Unknown fields are ignored, so you can leave whatever else your helpdesk exports in place. `messages[0]` is read as the opening message and the rest as the conversation in order; `isStaff` is what separates your agents from the customer in the rendered prompt.
+
+**Exporting your own data is a supported path, not a workaround.** Write a small script that maps your helpdesk's export into the shape above and you are done — nothing downstream cares where the file came from.
+
 ## Usage
 
-Put your ticket file in a directory and open Claude Code there. Qval reads and writes in the working directory and never modifies the ticket set.
+Put your ticket file in a directory and open Claude Code there. Qval reads and writes in the working directory and never modifies the ticket set. **The filename doesn't matter**: Qval finds a dataset by reading the `.json` files in the directory and checking which ones parse as tickets, so `zendesk-export-q3.json` is found exactly like `tickets.json`. You can always name the file explicitly instead.
 
-The ticket file is whatever [Qbort](https://github.com/balevine/qbort) produces, so you can port your own data into that shape. Either `{ meta, tickets: [...] }` or a bare array, where each ticket is `{ id, subject, status, messages: [{ from, body, isStaff, createdAt }] }`. Only the integer `id` is required.
-
-If you generated it with Qbort, there is nothing to move: Qbort writes `qbort-output/tickets-YYYYMMDD-HHMMSS.json` and Qval looks there too. It keeps every run, so once you have generated a few you will be asked which one you meant.
+If you generated the set with [Qbort](https://github.com/balevine/qbort), there is nothing to move: it writes `qbort-output/tickets-YYYYMMDD-HHMMSS.json`, and that one subdirectory is searched as well as the working directory. Qbort keeps every run, so once you have generated a few you will be asked which one you meant.
 
 ### 1. Score with Claude
 
@@ -112,7 +134,7 @@ Nothing needs saving. Every change, human value or config edit, is written throu
 
 A `*.qval.json` is a list of **evaluators**, each with a `kind` (`llm` or `human`), a display `name`, and an explicit `results[]` keyed by ticket id. A typical working file has one of each. Alongside them it carries a snapshot of `{schema, rules}` and two fingerprints:
 
-- **`dataset.fingerprint`** is a SHA-256 over canonicalized ticket content. The file **references** its dataset rather than embedding it, so files stay small and the tickets stay canonical in Qbort's output.
+- **`dataset.fingerprint`** is a SHA-256 over canonicalized ticket content. The file **references** its dataset rather than embedding it, so files stay small and your ticket file stays the one canonical copy.
 - **`config.fingerprint`** is a SHA-256 over the normalized schema plus rules.
 
 **Merging requires both to be equal.** Same tickets, same schema, same rules, or the merge is refused with the reason. Reformatting and re-exporting a ticket file does not change its fingerprint, because both hashes are over content rather than bytes.
@@ -136,7 +158,7 @@ The only thing in the repo that needs building is the UI. `vite` and `vite-plugi
 
 Scripts: `npm test` (unit + integration), `npm run typecheck`, `npm run check:ui` (rebuilds the bundle and fails if the committed copy has drifted), `npm run dev` (vite dev server for the UI, which has no API of its own, so point it at a running review server with `QVAL_DEV_SERVER=http://127.0.0.1:PORT`).
 
-[`AGENTS.md`](AGENTS.md) is the orientation doc, and `.plans/PROJECT_SPEC.md` is the authoritative spec.
+**This README is the authoritative definition of Qval** — if a change makes something here wrong, the change isn't done until it's fixed. [`AGENTS.md`](AGENTS.md) is a companion for coding agents, covering how to work in the repo rather than what the app is.
 
 ---
 

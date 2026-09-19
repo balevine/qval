@@ -20,15 +20,15 @@ The CLI lives at `${CLAUDE_PLUGIN_ROOT}/bin/qval`. Let `QVAL` be that absolute p
 "$QVAL" serve
 ```
 
-With no argument it works out what to open: a single `*.qval.json` in the directory, or a single ticket file (Qbort's shape) if there is no eval file yet. It looks in the working directory and in `qbort-output/` below it, which is where Qbort puts a run. Pass the file explicitly when the user named one, as `"$QVAL" serve <path>`.
+With no argument it works out what to open: a single `*.qval.json` in the directory, or a single ticket file if there is no eval file yet. **Datasets are found by content, not by name** — every `.json` in the working directory is opened and kept if it parses as tickets, so a hand-exported `zendesk-q3.json` is found exactly like a `tickets.json`. The `qbort-output/` subdirectory is searched too, since that is where [Qbort](https://github.com/balevine/qbort) puts a run, but nothing requires one. Pass the file explicitly when the user named one, as `"$QVAL" serve <path>`, and note that a path outside the working directory is fine.
 
-Qbort keeps every run under its own timestamped name, so more than one dataset in `qbort-output/` is ordinary. Starting a **new** evaluation over several of them is refused as `AMBIGUOUS` with the list, because nothing but the user knows which run they meant. **Resuming** an existing `*.qval.json` is not, because an eval file names its dataset by fingerprint and the relink finds it on its own.
+Several datasets in one place is ordinary (Qbort keeps every run under its own timestamped name, and people accumulate exports). Starting a **new** evaluation over several of them is refused as `AMBIGUOUS` with the list, because nothing but the user knows which one they meant. **Resuming** an existing `*.qval.json` is not, because an eval file names its dataset by fingerprint and the relink finds it on its own.
 
 Read the first token of stdout:
 
 - **`SERVING`** — followed by `URL`, `WORKING_FILE`, `DATASET`, `CANDIDATES` (how many other eval files it found to merge), and `OPENED yes|no`. Go to Step 2.
 - **`ALREADY_SERVING`** — a session is already live here. Give the user that `URL` again. Do not start another.
-- **Exit 2**: `NO_DATASET` (nothing here to review), `AMBIGUOUS` (it lists the candidates — **ask the user which one with `AskUserQuestion`**, then re-run with that path), `MISSING_FILE`, `BAD_TICKETS`, `SERVER_FAILED`, `SERVER_TIMEOUT`.
+- **Exit 2**: `NO_DATASET` (nothing here to review — **ask the user where their ticket file is** and re-run with that path; don't assume they have one to generate), `AMBIGUOUS` (it lists the candidates — **ask the user which one with `AskUserQuestion`**, then re-run with that path), `MISSING_FILE`, `BAD_TICKETS`, `SERVER_FAILED`, `SERVER_TIMEOUT`.
 - **Exit 1**: a bad flag. Fix the command.
 
 Optional flags: `--compare a.qval.json,b.qval.json` (offer files from elsewhere for merging, on top of the ones found next to the working file), `--port N`, `--no-open`, `--out <dir>` (default `.qval-run`).
@@ -64,7 +64,7 @@ When they say they are finished (or ask what happened):
 
 ## Notes / invariants
 
-- **The eval file goes in the working directory, not beside the dataset.** That is where `/qval:evaluate-tickets` writes its own, and where the merge-candidate scan looks. A dataset under `qbort-output/` does not drag the eval file down there with it.
+- **The eval file goes in the working directory, not beside the dataset.** That is where `/qval:evaluate-tickets` writes its own, and where the merge-candidate scan looks. A dataset in a subdirectory or elsewhere on disk does not drag the eval file along with it.
 - **The server never sees a path.** Both files are resolved here, before the browser exists, and no endpoint accepts one. That is what removes the path-traversal problem instead of defending against it. Merging works the same way: `serve` resolves the mergeable files and the browser picks one by name.
 - **Merging refuses on mismatched fingerprints**, and it should. Two eval files pool into one comparison only when they are of the same tickets *and* the same schema *and* the same rules. The refusal shows up in the merge panel with the reason.
 - **The config files are shared with `/qval:evaluate-tickets`.** `serve` seeds a new session's schema and rules from `EVAL_SCHEMA.json` / `EVAL_RULES.md` when they exist, and writes back whatever the person ended up using when the session ends. So a schema built in the browser is the one a follow-up LLM run scores against.

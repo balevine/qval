@@ -1,4 +1,4 @@
-// Per-value validation and repair of an evaluator's output against the schema (spec §2.4/§6).
+// Per-value validation and repair of an evaluator's output against the schema.
 // Every property is coerce-or-drop and is validated independently, so one bad field never discards
 // a ticket's other values, and every repair is recorded in `issues` (non-silent).
 

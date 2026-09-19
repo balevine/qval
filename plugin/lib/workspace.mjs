@@ -32,7 +32,7 @@ import { atomicWriteJson, readJson } from './fsUtil.mjs'
 /**
  * A file the host is willing to merge, before anyone has asked for it. The host resolves these (the
  * CLI scans the working directory and takes `--compare` arguments); the UI only ever sees the `id`
- * and the `name`, which is what keeps paths off the wire (spec §19).
+ * and the `name`, which is what keeps paths off the wire.
  * @typedef {{ id: string, name: string, path: string }} ComparisonSource
  */
 
@@ -61,7 +61,7 @@ export function suggestEvalName(datasetPath) {
 /**
  * Owns the in-memory working session (dataset tickets + working eval file + its path) and all file
  * I/O for it. The renderer holds a display copy but never a filesystem path — the host tracks the
- * path and does atomic writes (spec §10/§11).
+ * path and does atomic writes.
  */
 export class Workspace {
   /**
@@ -126,7 +126,7 @@ export class Workspace {
 
   /**
    * MERGE one of the offered candidates, by id. This is the only merge route the browser has: the
-   * path never leaves the host (spec §19).
+   * path never leaves the host.
    * @param {string} id
    * @returns {Promise<SessionSnapshot | null>}
    */
@@ -163,7 +163,7 @@ export class Workspace {
   /**
    * While the working file is **unlocked** (no scored values yet), keep its config snapshot in sync
    * with the current working schema/rules so the file's fingerprint stays honest as the user sets up
-   * the schema. Once a score locks the file, its config is frozen and this is a no-op (spec §3/§4).
+   * the schema. Once a score locks the file, its config is frozen and this is a no-op.
    * @returns {Promise<void>}
    */
   async ensureConfigStamped() {
@@ -180,7 +180,7 @@ export class Workspace {
   /**
    * The loaded file is the authoritative config source: reload the working schema/rules from its
    * snapshot so the editors mirror the file (and, once locked, stay pinned to it). Called on
-   * open/reload (spec §3). The model that produced the file is not settings — it lives on the file's
+   * open/reload. The model that produced the file is not settings — it lives on the file's
    * own `llm` evaluator, which is what pins a top-up run (`lockedLlmProvider`).
    * @param {EvalFile} file
    * @returns {Promise<void>}
@@ -191,7 +191,7 @@ export class Workspace {
 
   /**
    * Upsert a ticket's human values into the working file and persist. **Serialized** so rapid
-   * edits apply in call order without clobbering each other (spec §7).
+   * edits apply in call order without clobbering each other.
    * @param {{ name: string, ticketId: number, values: EvalValues }} args
    * @returns {Promise<void>}
    */

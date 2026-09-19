@@ -1,10 +1,10 @@
 /**
  * The two halves of Qval, checked against each other.
  *
- * `/qval:evaluate-tickets` (the engine, spec §18) writes the LLM evaluator. `/qval:review` (the
- * server plus the browser's fetch client, §19) writes the human one. The claim that has to hold is
+ * `/qval:evaluate-tickets` (the engine) writes the LLM evaluator. `/qval:review` (the
+ * server plus the browser's fetch client) writes the human one. The claim that has to hold is
  * that a file produced by one merges with a file produced by the other: same dataset, same schema,
- * same rules, so both fingerprints match and the comparison math has two streams to compare (§8).
+ * same rules, so both fingerprints match and the comparison math has two streams to compare.
  *
  * That used to be `skillParity.test.ts`'s job, back when the logic existed twice. It exists once
  * now, so this checks the wiring instead of two implementations agreeing.
@@ -122,7 +122,7 @@ async function startReview(home: string, options: { uiFile?: string; compare?: s
   const evalPath = join(home, 'review.qval.json')
   await workspace.save(evalPath)
   // What the CLI does before the browser exists: name the files on offer to merge, so the client
-  // only ever sends an id back (spec §19).
+  // only ever sends an id back.
   if (options.compare) {
     workspace.setComparisonSources([{ id: 'c1', name: 'tickets.qval.json', path: options.compare }])
   }
@@ -154,7 +154,7 @@ const readEval = (path: string): EvalFile => {
 
 describe('skill file + browser file', () => {
   it('agree on both fingerprints and merge into a human-vs-LLM comparison', async () => {
-    // Two separate working directories over the same dataset, which is the two-people case §8 is for.
+    // Two separate working directories over the same dataset: the two-people case merging exists for.
     const skillHome = join(dir, 'skill')
     const reviewHome = join(dir, 'review')
     for (const home of [skillHome, reviewHome]) {
@@ -282,7 +282,7 @@ describe('the renderer client against the real server', () => {
     // Self-contained: no stylesheet link, no script src, nothing to fetch from anywhere.
     expect(html).not.toMatch(/<link[^>]+rel=["']?stylesheet/i)
     expect(html).not.toMatch(/<script[^>]+\ssrc=/i)
-    // The fonts the design depends on travel with it (spec §13), inlined rather than assumed.
+    // The fonts the design depends on travel with it, inlined rather than assumed.
     expect((html.match(/data:font\/woff2/g) ?? []).length).toBe(4)
 
     const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)]

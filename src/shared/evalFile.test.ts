@@ -177,7 +177,7 @@ describe('needsAttention', () => {
   })
 })
 
-describe('config lock + model pin (spec §3/§4)', () => {
+describe('config lock + model pin', () => {
   const now = '2026-07-03T00:00:00.000Z'
   const llmResult = (ticketId: number, over: Partial<EvalResult> = {}): EvalResult => ({
     ticketId,

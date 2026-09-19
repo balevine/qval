@@ -39,7 +39,7 @@ function cloneProp(p: EvalProperty): EvalProperty {
 }
 
 /**
- * The ordered, editable list of typed output properties (spec §4). Local draft state is
+ * The ordered, editable list of typed output properties. Local draft state is
  * authoritative while the tab is open; each change persists the schema to settings (main
  * normalizes it). Inline validation is advisory — invalid rows simply aren't persisted.
  */

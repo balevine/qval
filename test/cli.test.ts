@@ -201,6 +201,40 @@ describe('serve: what it opens', () => {
     expect(res.err).toContain('b.qval.json')
   })
 
+  it('finds a hand-exported dataset by shape rather than by filename', async () => {
+    // Nobody who exports from their own helpdesk names the file `tickets.json`, and Qval is not a
+    // Qbort accessory. Every .json is opened and judged on what is inside it.
+    const cwd = await home('byshape', {
+      'zendesk-export-q3.json': TICKETS,
+      'settings-backup.json': { some: 'config' } // a .json that is not ticket data
+    })
+    await fs.rm(join(cwd, 'tickets.json'))
+
+    const res = qval(cwd, ['serve', '--no-open'])
+    expect(res.out.split('\n')[0]).toBe('SERVING')
+    expect(field(res.out, 'DATASET')).toBe(join(cwd, 'zendesk-export-q3.json'))
+    expect(field(res.out, 'WORKING_FILE')).toBe(join(cwd, 'zendesk-export-q3.qval.json'))
+  })
+
+  it('points at an explicit path when the directory holds no dataset at all', async () => {
+    const cwd = join(dir, 'nothing')
+    await fs.mkdir(cwd, { recursive: true })
+    const res = qval(cwd, ['serve', '--no-open'])
+
+    expect(res.status).toBe(2)
+    expect(res.err).toMatch(/^NO_DATASET/)
+    // The way out has to be in the message: the dataset may simply live somewhere else.
+    expect(res.err).toContain('qval serve <path>')
+
+    // And that is genuinely a way out — a path outside the working directory is accepted.
+    const elsewhere = await home('elsewhere-data')
+    const res2 = qval(cwd, ['serve', join(elsewhere, 'tickets.json'), '--no-open'])
+    expect(res2.out.split('\n')[0]).toBe('SERVING')
+    expect(field(res2.out, 'DATASET')).toBe(join(elsewhere, 'tickets.json'))
+    // The eval file still lands in the working directory, not next to the far-away dataset.
+    expect(field(res2.out, 'WORKING_FILE')).toBe(join(cwd, 'tickets.qval.json'))
+  })
+
   it('finds the dataset Qbort left in qbort-output/, and keeps the eval file in the working dir', async () => {
     // Qbort stopped writing a tickets.json beside the working directory: every run lands in
     // `qbort-output/` under a timestamped name. Scanning only the working directory finds nothing.

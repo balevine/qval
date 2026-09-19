@@ -147,7 +147,7 @@ describe('errors', () => {
 
 describe('merge, export, and done', () => {
   // The point of all three: a body that names an id, or nothing at all. Never a path — the CLI
-  // resolved those before the browser existed (spec §19).
+  // resolved those before the browser existed.
   it('merges and un-merges a candidate by id', async () => {
     const merged: SessionSnapshot = { ...SESSION, candidates: [{ id: 'c1', name: 'alice.qval.json', merged: true }] }
     const { api, calls } = harness({ '/api/comparison': { json: { session: merged } } })

@@ -12,12 +12,12 @@ interface TopBarProps {
 }
 
 /**
- * Single-page top bar: title on the left; MERGE, FINISH, and settings on the right (see spec §13).
+ * Single-page top bar: title on the left; MERGE, FINISH, and settings on the right.
  *
  * There is no OPEN and no EXPORT here any more. The CLI binds the files before the tab exists
- * (spec §19), the server persists every edit as it happens, and the report export lives next to the
+ *, the server persists every edit as it happens, and the report export lives next to the
  * merged roster it belongs to, in the summary. There is no EVALUATE either — the LLM run is
- * `/qval:evaluate-tickets` (spec §18).
+ * `/qval:evaluate-tickets`.
  */
 export function TopBar({ hasDataset, candidateCount, onMerge, onFinish, onOpenSettings }: TopBarProps) {
   return (

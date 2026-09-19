@@ -11,13 +11,13 @@ interface MergeModalProps {
 }
 
 /**
- * MERGE, in a browser that cannot open a file dialog and a server that accepts no paths (spec §19).
+ * MERGE, in a browser that cannot open a file dialog and a server that accepts no paths.
  * The CLI scans the working directory for other `*.qval.json` files and offers them by name; this
  * lists that offer and merges by id.
  *
  * A refusal is the interesting case, so it is shown per row rather than in a toast: "different
  * dataset" and "different rules or schema" are facts about the two files that the user has to act
- * on, and §8 is the whole reason both fingerprints have to match.
+ * on, and pooling two files' scores is only meaningful when both fingerprints match.
  */
 export function MergeModal({ open, onOpenChange }: MergeModalProps) {
   const { session, setSession } = useSession()

@@ -16,10 +16,10 @@ function EmptyState({ loading }: { loading: boolean }) {
       <ClipboardList className="mx-auto h-10 w-10" strokeWidth={1.5} />
       <h1 className="mt-4 font-mono text-lg font-bold uppercase tracking-widest">No dataset loaded</h1>
       <p className="mt-2 text-sm text-ink/60">
-        Close this tab and run <span className="font-mono">/qval:review</span> in a directory holding a{' '}
-        <span className="font-mono">tickets.json</span> (from Qbort) or a{' '}
-        <span className="font-mono">.qval.json</span> evaluation file. Qval opens whatever the command line
-        points it at.
+        Close this tab and run <span className="font-mono">/qval:review</span> in a directory holding a
+        ticket file or a <span className="font-mono">.qval.json</span> evaluation file. Any{' '}
+        <span className="font-mono">.json</span> in the ticket format counts, whatever it is named. Qval
+        opens whatever the command line points it at.
       </p>
       {loading ? (
         <div className="mt-6 font-mono text-[11px] uppercase tracking-widest text-ink/40">Loading…</div>
@@ -58,7 +58,7 @@ function AppShell() {
   const hasDataset = !!session
 
   // POST /api/done is what turns an `abandoned` session into a `done` one; without it the CLI can
-  // only ever infer the end from the tab going away (spec §19).
+  // only ever infer the end from the tab going away.
   const finish = async () => {
     try {
       await api.review.done()

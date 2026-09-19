@@ -1,4 +1,4 @@
-// Canonical hashing for the two merge-matching identities (spec §2.5). Both fingerprints hash a
+// Canonical hashing for the two merge-matching identities. Both fingerprints hash a
 // canonicalized *content* string (not raw file bytes), so re-exports and reformatting still match
 // while any real content change doesn't.
 //
@@ -14,8 +14,9 @@ import { normalizeSchema } from './schema.mjs'
  */
 
 /**
- * Reduce the tickets to their meaningful fields in a fixed key order, dropping Qbort's `meta` and
- * all formatting. Building the objects in explicit order makes `JSON.stringify` deterministic.
+ * Reduce the tickets to their meaningful fields in a fixed key order, dropping the file's `meta`
+ * and all formatting. Building the objects in explicit order makes `JSON.stringify` deterministic.
+ * Two exports of the same tickets therefore fingerprint alike however they were produced or spaced.
  * @param {Ticket[]} tickets
  * @returns {string}
  */

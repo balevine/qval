@@ -1,4 +1,4 @@
-// The eval-file model (spec §2.4): create a fresh working file, merge results into it, and
+// The eval-file model: create a fresh working file, merge results into it, and
 // tolerantly normalize a loaded `*.qval.json`. The file lists **evaluators** (each with a `kind`,
 // a name, and a sparse `results[]`) and references the dataset by fingerprint.
 //
@@ -27,7 +27,7 @@ export const HUMAN_EVALUATOR_ID = 'human'
 
 /**
  * The `provider` every LLM evaluator Qval writes now carries: the evaluation runs inside Claude
- * Code with the ambient model (spec §18). A file from an older release may carry `'ollama'` or
+ * Code with the ambient model. A file from an older release may carry `'ollama'` or
  * `'anthropic'` instead. It still opens, still accepts a human eval, and still merges — nothing
  * reads this string except as a label and the model lock below.
  */
@@ -86,7 +86,7 @@ export function applyLlmResults(file, run) {
 
 /**
  * Upsert one ticket's **human** values into the file's own `human` evaluator (creating it if
- * absent), replacing that ticket's values and leaving other tickets untouched (spec §7). An empty
+ * absent), replacing that ticket's values and leaving other tickets untouched. An empty
  * `values` ({}) removes the ticket's human result ("not evaluated"). Pure.
  * @param {EvalFile} file
  * @param {{ name: string, ticketId: number, values: EvalValues, now: string }} args
@@ -199,7 +199,7 @@ export function looksLikeEvalFile(raw) {
   return raw.meta?.app === 'qval' || Array.isArray(raw.evaluators)
 }
 
-// --- Config lock (spec §3/§4) ------------------------------------------------
+// --- Config lock -------------------------------------------------------------
 // A file's config (schema + rules) and the model that produced it are frozen once real scores
 // exist, so the file's snapshot/fingerprint can never disagree with how its data was produced.
 // The escape hatch is re-opening the tickets.json, which starts a fresh (unlocked) working file.
@@ -217,7 +217,7 @@ export function configLocked(file) {
 
 /**
  * The provider/model the file's scored LLM evaluator was produced with. One model must score every
- * ticket in a file, so `plan` pins a top-up run to whatever this returns (spec §3/§18).
+ * ticket in a file, so `plan` pins a top-up run to whatever this returns.
  * @param {EvalFile} file
  * @returns {{ provider?: string, model?: string } | null}
  */

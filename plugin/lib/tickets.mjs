@@ -1,7 +1,12 @@
-// Tolerant validation of an imported tickets file in Qbort's shape (spec §2.1). Accept
-// `{ meta, tickets }` or a bare tickets array, ignore unknown fields, coerce soft fields, and drop
-// any ticket lacking a usable numeric id (or duplicating one). Qval never mutates the dataset, this
-// only reads it into a clean list.
+// Tolerant validation of an imported ticket file. Accept `{ meta, tickets }` or a bare
+// tickets array, ignore unknown fields, coerce soft fields, and drop any ticket lacking a usable
+// numeric id (or duplicating one). Qval never mutates the dataset, this only reads it into a clean
+// list.
+//
+// The tolerance is the point, not laxness. Qbort emits this shape, but so does any script someone
+// writes to map a real helpdesk export onto it, and that second case is meant to be as easy as the
+// first. Only a missing or non-integer id is fatal, because it is the one field nothing downstream
+// can invent: results are keyed by it. Do not tighten this into a check for one producer's files.
 //
 // One non-object message empties the whole conversation rather than just that message. That is
 // deliberate. The dataset fingerprint hashes whatever this returns, so "close enough" is wrong.

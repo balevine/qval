@@ -1,6 +1,6 @@
 /**
  * The renderer's data layer: an `IpcApi` implementation backed by `fetch` against the review server
- * (`plugin/server/server.mjs`, spec §19). It replaces the Electron preload bridge, so the same UI
+ * (`plugin/server/server.mjs`). It replaces the Electron preload bridge, so the same UI
  * now runs in an ordinary browser tab.
  *
  * Two things shrink here relative to the old bridge, both on purpose.
@@ -10,7 +10,7 @@
  * CLI bound, merging names a candidate by id, and the report's destination is derived from the
  * working file rather than chosen.
  *
- * **No LLM run.** That moved to `/qval:evaluate-tickets` (spec §18), and the provider, secret, and
+ * **No LLM run.** That moved to `/qval:evaluate-tickets`, and the provider, secret, and
  * evaluation members are gone from the contract entirely — there is nothing left to stub.
  */
 
@@ -118,7 +118,7 @@ export function createApiClient(options: ApiClientOptions = {}): IpcApi {
       get: async () => (await loadSession()).settings,
       set: async (partial) => {
         // Three fields and no more, mirroring the server's allow-list. The rest of `Settings` is
-        // host state the browser has no business writing (spec §19).
+        // host state the browser has no business writing.
         const patch: Partial<Settings> = {}
         if ('schema' in partial) patch.schema = partial.schema
         if ('rules' in partial) patch.rules = partial.rules

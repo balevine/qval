@@ -12,7 +12,7 @@ interface HumanEvalFormProps {
   values: EvalValues
   /** The LLM's values for this ticket, shown for reference (never pre-fills the human's). */
   llmValues: EvalValues | null
-  /** The LLM result's validation-repair trail, shown as read-only badges next to the reference (§9.2). */
+  /** The LLM result's validation-repair trail, shown as read-only badges next to the reference. */
   llmIssues?: EvalIssue[] | null
   /** Read-only while an LLM run is in flight (the working file is locked to the run). */
   disabled?: boolean
@@ -30,7 +30,7 @@ function scoreSteps(p: EvalProperty): number[] | null {
 }
 
 /**
- * Renders one editable field per schema property (spec §7). Booleans/enums/small scores are
+ * Renders one editable field per schema property. Booleans/enums/small scores are
  * click-to-toggle segmented buttons (re-click clears → unscored); larger scores use a number
  * input; text uses a textarea. The LLM's value is shown for reference, clearly labeled.
  */
@@ -67,7 +67,7 @@ export function HumanEvalForm({ schema, values, llmValues, llmIssues, disabled, 
 
 /**
  * Read-only LLM reference value for one property, with a badge when the automatic per-value repair
- * (§6) altered or dropped the model's raw output. A `dropped` value shows a "— (dropped)" marker
+ * altered or dropped the model's raw output. A `dropped` value shows a "— (dropped)" marker
  * even though it's absent from `values`.
  */
 function LlmReference({

@@ -43,7 +43,7 @@ const DEFAULT_LEASE_GRACE_MS = 10_000
 const SSE_KEEPALIVE_MS = 15_000
 
 /**
- * Content-Security-Policy for the served UI (spec §11). Every network
+ * Content-Security-Policy for the served UI. Every network
  * call the page makes goes to this same origin, so `connect-src 'self'` is the whole story.
  *
  * `script-src` is filled in per response by `contentSecurityPolicy`. The bundle is a single file
@@ -335,14 +335,14 @@ export function createReviewServer({
 
     const next = await settings.set(patch)
     // Keep an unlocked working file's config snapshot in sync as the user edits schema/rules, so
-    // its fingerprint stays honest until the first score freezes it (spec §3/§4).
+    // its fingerprint stays honest until the first score freezes it.
     if ('schema' in patch || 'rules' in patch) await workspace.ensureConfigStamped()
     sendJson(res, 200, { settings: next, session: workspace.snapshot() })
   }
 
   /**
    * MERGE or un-merge one of the candidates the CLI resolved, **by id**. The path stays host-side,
-   * which is how a browser gets §8's merge back without any endpoint accepting a path. A refusal
+   * which is how a browser gets merging back without any endpoint accepting a path. A refusal
    * (different dataset, different config) comes back as a 409 with the reason, because that is a
    * fact about the two files the user needs to read, not a bug.
    * @param {unknown} body

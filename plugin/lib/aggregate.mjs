@@ -1,4 +1,4 @@
-// Pure aggregation (spec §2.6/§8). LLM and human evaluators are pooled into two **separate**
+// Pure aggregation. LLM and human evaluators are pooled into two **separate**
 // groups by `kind` and never combined. The headline output is the per-property `comparison`
 // (LLM group vs human group) plus a dataset-level roll-up.
 
@@ -213,7 +213,7 @@ function modeOf(distribution) {
 // --- comparison --------------------------------------------------------------
 
 /**
- * Compare the pooled LLM aggregate to the pooled human aggregate for one property (§2.6).
+ * Compare the pooled LLM aggregate to the pooled human aggregate for one property.
  * @param {PropertyAggregate} llm
  * @param {PropertyAggregate} human
  * @returns {StreamComparison | null}

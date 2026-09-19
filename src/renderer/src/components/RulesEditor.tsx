@@ -11,7 +11,7 @@ import { configLocked } from '@lib/evalFile.mjs'
 import { cn } from '@/lib/utils'
 
 /**
- * Free-form rules editor (spec §2.3/§4) plus a compiled-prompt preview. The preview runs the
+ * Free-form rules editor plus a compiled-prompt preview. The preview runs the
  * pure prompt compiler over a sample ticket so the user sees exactly what the LLM will receive
  * (rules + schema spec + output contract + a rendered ticket).
  */

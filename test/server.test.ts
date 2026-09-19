@@ -288,7 +288,7 @@ describe('POST /api/config', () => {
 })
 
 describe('POST /api/comparison', () => {
-  /** A second eval file over the same tickets and the same config, which is what merges (§8). */
+  /** A second eval file over the same tickets and the same config, which is what merges. */
   async function sibling(home: string, workspace: Workspace, name = 'alice.qval.json') {
     const file = workspace.currentWorkingFile()!
     const path = join(home, name)
