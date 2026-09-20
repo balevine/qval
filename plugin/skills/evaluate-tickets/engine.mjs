@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Deterministic engine for the evaluate-tickets skill. Owns everything the LLM must NOT: config
 // validation, both fingerprints, target selection, batching, prompt compilation, per-value
 // validation and repair, retry accounting, eval-file assembly, and atomic writes. The only thing

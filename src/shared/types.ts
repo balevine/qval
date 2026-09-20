@@ -239,18 +239,18 @@ export interface Settings {
  * That is why there is no `open` and no directory picker.
  */
 export interface IpcApi {
-  app: {
-    getVersion: () => Promise<string>
-  }
   settings: {
     get: () => Promise<Settings>
     set: (partial: Partial<Settings>) => Promise<Settings>
   }
   session: {
-    /** Load the session the host bound at launch. Null when it bound nothing. */
-    loadLast: () => Promise<SessionSnapshot | null>
-    /** The path the working file is bound to. The host persists on every mutation. */
-    save: () => Promise<string | null>
+    /**
+     * Everything the UI needs to start: the host's version, and the session it bound at launch
+     * (null when it bound nothing). One call, because the host answers all of it in one response.
+     * There is no separate version getter: a second round trip for a field this one already
+     * carries is how the old one worked, and nothing rendered the result.
+     */
+    boot: () => Promise<{ appVersion: string; session: SessionSnapshot | null }>
     /** MERGE a candidate by id; throws with a reason on a fingerprint mismatch. */
     mergeComparison: (id: string) => Promise<SessionSnapshot | null>
     /** Un-merge a comparison by id; returns the updated session. */

@@ -9,8 +9,9 @@
  * That used to be `skillParity.test.ts`'s job, back when the logic existed twice. It exists once
  * now, so this checks the wiring instead of two implementations agreeing.
  *
- * It also could not be written until stage 6: driving the renderer's `apiClient` against a real
- * `node:http` server needs DOM and node types in one program, which the old tsconfig split forbade.
+ * It also could not be written under the old tsconfig split: driving the renderer's `apiClient`
+ * against a real `node:http` server needs DOM and node types in one program, and the node/web
+ * split (an electron-vite artifact) forbade exactly that.
  */
 
 import { spawnSync } from 'node:child_process'
@@ -228,9 +229,8 @@ describe('the renderer client against the real server', () => {
     await atomicWriteJson(join(home, 'tickets.json'), TICKETS)
     const { api } = await startReview(home)
 
-    expect(await api.app.getVersion()).toBe('0.1.0')
-
-    const session = await api.session.loadLast()
+    const { appVersion, session } = await api.session.boot()
+    expect(appVersion).toBe('0.1.0')
     expect(session!.tickets.map((t) => t.id)).toEqual([1, 2, 3])
 
     await api.settings.set({ schema: SCHEMA, rules: RULES })
@@ -239,20 +239,23 @@ describe('the renderer client against the real server', () => {
     // Out of range on purpose: the server re-validates against the file's schema, so the client
     // cannot write a value the form itself would not allow.
     await api.human.setValues(2, { empathy: 99 })
-    const after = await api.session.loadLast()
+    const after = (await api.session.boot()).session
     const human = after!.workingFile.evaluators.find((e) => e.kind === 'human')!
     expect(human.results.find((r) => r.ticketId === 2)!.values).toEqual({ empathy: 5 })
   })
 
-  it('reports the file it is bound to instead of pretending to save-as', async () => {
+  it('reports the file it is bound to, which the browser never got to choose', async () => {
     const home = join(dir, 'two')
     await fs.mkdir(home, { recursive: true })
     await atomicWriteJson(join(home, 'tickets.json'), TICKETS)
     const { api, evalPath } = await startReview(home)
 
-    expect(await api.session.save()).toBe(evalPath)
+    // The path arrives on the session the host bound. There is no save-as and no endpoint that
+    // takes a destination, so this is the only way the UI ever learns where the file is.
+    const { session } = await api.session.boot()
+    expect(session!.workingPath).toBe(evalPath)
     // No candidates offered, so there is nothing to merge and the UI hides the affordance.
-    expect((await api.session.loadLast())!.candidates).toEqual([])
+    expect(session!.candidates).toEqual([])
   })
 
   it('exports the report beside the working file, with no destination from the browser', async () => {

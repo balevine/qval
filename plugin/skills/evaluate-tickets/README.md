@@ -35,7 +35,7 @@ Everything else happens in the review UI, which is the sibling skill **[`/qval:r
 
 1. `cd` into the directory holding your ticket file (the skill reads and writes there). The filename doesn't matter — candidates are found by opening the `.json` files and checking the shape. A `qbort-output/` subdirectory is searched too, if you have one. If there's more than one dataset, you'll be asked which you meant; if there's none, you'll be asked for the path.
 2. Invoke the skill by typing **`/qval:evaluate-tickets`**. It is deliberately not model-invocable: it stays out of the context window until you ask for it, which means asking in prose ("evaluate these tickets") will not trigger it.
-3. If **`EVAL_RULES.md`** and **`EVAL_SCHEMA.json`** don't exist, the skill scaffolds them from the templates and stops so you can say what you actually want measured. Describe it in prose and Claude drafts both files; `engine.mjs config --check` validates the schema and prints it back as a table before anything runs. `/qval:review` reads and writes the same two files, so a schema built in the browser is one this skill can run against.
+3. If **`EVAL_RULES.md`** and **`EVAL_SCHEMA.json`** don't exist, the skill scaffolds them with the starter schema and rules and stops so you can say what you actually want measured. Describe it in prose and Claude drafts both files; `engine.mjs config --check` validates the schema and prints it back as a table before anything runs. `/qval:review` reads and writes the same two files, so a schema built in the browser is one this skill can run against.
 4. Confirm the **model** to record. It's stamped permanently into the eval file, so there's no default and no placeholder; the skill asks if it can't resolve one.
 5. The skill plans the run, fans the batches out to parallel subagents, assembles the results, and runs one retry round over anything that failed or produced an off-schema value.
 6. Run **`/qval:review`** to open the resulting **`*.qval.json`** in a browser, read the scores, and add your human evaluation.
@@ -80,9 +80,7 @@ SKILL.md                    instructions Claude follows (not human docs)
 engine.mjs                  CLI: init | config | plan | assemble | retry | status
 ../../lib/                  the logic, shared with the review UI (schema, rules, fingerprint, tickets,
                             promptCompiler, evalValidate, evalFile, aggregate, settings, workspace,
-                            settingsStore, fsUtil, paths, args, version)
-templates/EVAL_RULES.md     starter rules text
-templates/EVAL_SCHEMA.json  starter schema
+                            settingsStore, fsUtil, paths, args, host, version)
 ```
 
 ## Caveats

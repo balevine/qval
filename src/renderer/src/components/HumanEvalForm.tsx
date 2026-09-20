@@ -14,8 +14,6 @@ interface HumanEvalFormProps {
   llmValues: EvalValues | null
   /** The LLM result's validation-repair trail, shown as read-only badges next to the reference. */
   llmIssues?: EvalIssue[] | null
-  /** Read-only while an LLM run is in flight (the working file is locked to the run). */
-  disabled?: boolean
   onChange: (values: EvalValues) => void
 }
 
@@ -34,7 +32,7 @@ function scoreSteps(p: EvalProperty): number[] | null {
  * click-to-toggle segmented buttons (re-click clears → unscored); larger scores use a number
  * input; text uses a textarea. The LLM's value is shown for reference, clearly labeled.
  */
-export function HumanEvalForm({ schema, values, llmValues, llmIssues, disabled, onChange }: HumanEvalFormProps) {
+export function HumanEvalForm({ schema, values, llmValues, llmIssues, onChange }: HumanEvalFormProps) {
   const set = (key: string, value: EvalValue | undefined) => {
     const next = { ...values }
     if (value === undefined) delete next[key]
@@ -45,7 +43,7 @@ export function HumanEvalForm({ schema, values, llmValues, llmIssues, disabled, 
   const issueByKey = new Map((llmIssues ?? []).map((i) => [i.key, i]))
 
   return (
-    <fieldset disabled={disabled} className={cn('m-0 space-y-5 border-0 p-0', disabled && 'opacity-60')}>
+    <fieldset className="m-0 space-y-5 border-0 p-0">
       {schema.map((p) => {
         const v = values[p.key]
         return (
@@ -195,7 +193,9 @@ function Field({ p, value, onSet }: { p: EvalProperty; value: EvalValue | undefi
           if (raw === '') return onSet(undefined)
           const n = Number(raw)
           // Clamp/snap to the property's range client-side so the optimistic value matches what
-          // main persists (main re-clamps too, but its result isn't echoed back to the renderer).
+          // comes back. The server re-clamps in `postResult` and returns a session snapshot holding
+          // the persisted file, so skipping this would show the raw number and then visibly correct
+          // it when the response lands. The server's pass is the authoritative one either way.
           onSet(Number.isFinite(n) ? clampScore(n, p) : undefined)
         }}
       />

@@ -184,15 +184,6 @@ export function evaluatedCount(file, kind) {
   return ownResults(file, kind).filter(isScoredResult).length
 }
 
-/**
- * How many tickets the file's human evaluator has scored (non-empty values).
- * @param {EvalFile} file
- * @returns {number}
- */
-export function humanEvaluatedCount(file) {
-  return evaluatedCount(file, 'human')
-}
-
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`
 
 /**

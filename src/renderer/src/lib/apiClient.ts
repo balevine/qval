@@ -131,9 +131,6 @@ export function createApiClient(options: ApiClientOptions = {}): IpcApi {
   let writeQueue: Promise<unknown> = Promise.resolve()
 
   return {
-    app: {
-      getVersion: async () => (await loadSession()).appVersion
-    },
     settings: {
       get: async () => (await loadSession()).settings,
       set: async (partial) => {
@@ -150,10 +147,10 @@ export function createApiClient(options: ApiClientOptions = {}): IpcApi {
       }
     },
     session: {
-      loadLast: async () => (await loadSession()).session,
-      // The server persists on every mutation, so there is nothing to flush — report where the file
-      // already is. Save-As needs a path, and paths come from the CLI now.
-      save: async () => (await loadSession()).session?.workingPath ?? null,
+      boot: async () => {
+        const { appVersion, session } = await loadSession()
+        return { appVersion, session }
+      },
       mergeComparison: async (id) =>
         (await request<{ session: SessionSnapshot | null }>('/api/comparison', { id, merge: true })).session,
       unmergeComparison: async (id) =>

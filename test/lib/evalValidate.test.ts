@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { clampScore, validateValues, hasDrops } from '@lib/evalValidate.mjs'
-import type { EvalProperty, EvalSchema } from './types'
+import type { EvalProperty, EvalSchema } from '@shared/types'
 
 const schema: EvalSchema = [
   { key: 'empathy', label: 'Empathy', type: 'score', min: 1, max: 5, step: 1 },

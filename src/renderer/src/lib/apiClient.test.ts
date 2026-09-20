@@ -69,10 +69,10 @@ describe('reads', () => {
     const { api, calls } = harness(sessionOnly)
 
     expect(await api.settings.get()).toEqual(SETTINGS)
-    expect(await api.session.loadLast()).toEqual(SESSION)
-    expect(await api.app.getVersion()).toBe('9.9.9')
+    // One boot call carries both. The version used to need a second round trip of its own.
+    expect(await api.session.boot()).toEqual({ appVersion: '9.9.9', session: SESSION })
 
-    expect(calls.map((c) => c.method)).toEqual(['GET', 'GET', 'GET'])
+    expect(calls.map((c) => c.method)).toEqual(['GET', 'GET'])
     expect(calls[0].url).toBe('/api/session')
   })
 
@@ -82,16 +82,9 @@ describe('reads', () => {
     expect(calls[0].headers['X-Qval-Token']).toBe('tok')
   })
 
-  it('reports where the working file already is instead of saving', async () => {
-    const { api, calls } = harness(sessionOnly)
-    expect(await api.session.save()).toBe('/tmp/x.qval.json')
-    expect(calls.every((c) => c.method === 'GET')).toBe(true)
-  })
-
-  it('returns null from loadLast when no session is bound', async () => {
+  it('returns a null session from boot when the host bound nothing, and still reports the version', async () => {
     const { api } = harness({ '/api/session': { json: { ...SESSION_PAYLOAD, session: null } } })
-    expect(await api.session.loadLast()).toBeNull()
-    expect(await api.session.save()).toBeNull()
+    expect(await api.session.boot()).toEqual({ appVersion: '9.9.9', session: null })
   })
 })
 

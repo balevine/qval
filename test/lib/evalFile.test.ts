@@ -6,7 +6,6 @@ import {
   configLocked,
   createWorkingFile,
   evaluatedCount,
-  humanEvaluatedCount,
   lockedLlmProvider,
   looksLikeEvalFile,
   mergeResults,
@@ -15,10 +14,9 @@ import {
   ownResults,
   summarizeEvalFile
 } from '@lib/evalFile.mjs'
-import type { EvalResult } from './types'
 import { DEFAULT_SCHEMA } from '@lib/schema.mjs'
 import { DEFAULT_RULES } from '@lib/rules.mjs'
-import type { EvalFile } from './types'
+import type { EvalFile, EvalResult } from '@shared/types'
 
 const working = (): EvalFile =>
   createWorkingFile({
@@ -223,7 +221,7 @@ describe('applyHumanValues', () => {
     let f = applyLlmResults(working(), { provider: 'anthropic', model: 'm', results: [{ ticketId: 1, values: { empathy: 4 }, evaluatedAt: now, error: null }] })
     f = applyHumanValues(f, { name: 'B', ticketId: 1, values: { resolved: true }, now })
     expect(ownResults(f, 'llm')).toHaveLength(1)
-    expect(humanEvaluatedCount(f)).toBe(1)
+    expect(evaluatedCount(f, 'human')).toBe(1)
   })
 })
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { SAMPLE_PREVIEW_TICKETS, compilePrompt, describeProperty } from '@lib/promptCompiler.mjs'
-import type { EvalProperty, EvalSchema, Ticket } from './types'
+import type { EvalProperty, EvalSchema, Ticket } from '@shared/types'
 
 const schema: EvalSchema = [
   { key: 'empathy', label: 'Empathy', type: 'score', min: 1, max: 5, step: 1, description: 'be strict' },

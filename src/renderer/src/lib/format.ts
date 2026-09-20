@@ -9,11 +9,6 @@ export function errorMessage(e: unknown, fallback?: string): string {
   return fallback ?? String(e)
 }
 
-/** Sequential integer id → "#123". */
-export function formatTicketId(id: number): string {
-  return `#${id}`
-}
-
 /** ISO 8601 → a compact local date+time, e.g. "Jun 30, 2026, 12:00 PM". Falls back to the raw string. */
 export function formatTimestamp(iso: string): string {
   const t = Date.parse(iso)
@@ -25,14 +20,6 @@ export function formatTimestamp(iso: string): string {
     hour: 'numeric',
     minute: '2-digit'
   })
-}
-
-/** Milliseconds → "1m 13s" / "8.2s". */
-export function formatDuration(ms: number): string {
-  const s = ms / 1000
-  if (s < 60) return `${s.toFixed(1)}s`
-  const m = Math.floor(s / 60)
-  return `${m}m ${Math.round(s - m * 60)}s`
 }
 
 /** Human-readable rendering of an eval value (for the LLM reference + compact displays). */

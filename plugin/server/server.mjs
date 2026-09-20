@@ -27,7 +27,7 @@ import { reportPathFor } from '../lib/paths.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
-/** The committed single-file UI bundle (built by `npm run build:ui`, see stage 6). */
+/** The committed single-file UI bundle, built by `npm run build` and checked by `npm run check:ui`. */
 export const DEFAULT_UI_FILE = join(HERE, '..', 'ui', 'index.html')
 
 /** Query parameter carrying the session token on the initial page load. */
@@ -441,8 +441,15 @@ export function createReviewServer({
     if (path === '/api/config') return postConfig(body.value, res)
     if (path === '/api/comparison') return postComparison(body.value, res)
     if (path === '/api/export') return postExport(res)
-    sendJson(res, 200, { ok: true, workingPath: workspace.currentPath() })
-    finish('done')
+    if (path === '/api/done') {
+      // Answer before finishing. `finish` settles the promise the CLI is waiting on to shut the
+      // server down, and the tab is still waiting on this response.
+      sendJson(res, 200, { ok: true, workingPath: workspace.currentPath() })
+      return finish('done')
+    }
+    // Unreachable through POST_ROUTES above, and that is the point: a route added to that list
+    // without a handler here now 404s instead of falling through to FINISH and ending the session.
+    return sendError(res, 404, 'Not found.')
   }
 
   return {
