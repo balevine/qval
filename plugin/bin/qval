@@ -30,7 +30,8 @@ import { atomicWriteJson, readJson } from '../lib/fsUtil.mjs'
 import { normalizeSchema } from '../lib/schema.mjs'
 import { normalizeRules } from '../lib/rules.mjs'
 import { configFingerprint } from '../lib/fingerprint.mjs'
-import { isScoredResult, looksLikeEvalFile, normalizeEvalFile, ownResults } from '../lib/evalFile.mjs'
+import { looksLikeEvalFile, normalizeEvalFile, summarizeEvalFile } from '../lib/evalFile.mjs'
+import { nowIso, pidAlive } from '../lib/host.mjs'
 import { defaultEvalPath, evalSearchDirs, OUTPUT_DIR, RUN_DIR, samePath } from '../lib/paths.mjs'
 import { parseTicketsFile } from '../lib/tickets.mjs'
 import { SettingsStore } from '../lib/settingsStore.mjs'
@@ -59,7 +60,6 @@ const STARTUP_TIMEOUT_MS = 20_000
 const NO_CLIENT_TIMEOUT_MS = 5 * 60_000
 
 const selfPath = fileURLToPath(import.meta.url)
-const nowIso = () => new Date().toISOString()
 
 function fail(line, ...rest) {
   console.error(line)
@@ -306,17 +306,6 @@ async function writeConfigForEngine(settings, dir, seededFingerprint) {
  */
 async function writeRecord(path, record) {
   await atomicWriteJson(path, record, { mode: 0o600 })
-}
-
-/** Is that pid still around? Used to tell a live session from one that died without saying so. */
-function pidAlive(pid) {
-  if (typeof pid !== 'number') return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (err) {
-    return err?.code === 'EPERM'
-  }
 }
 
 // ── serve (parent) ────────────────────────────────────────────────────────────
@@ -595,19 +584,8 @@ async function cmdStatus(args) {
     return
   }
 
-  const total = file.meta.dataset.ticketCount
-  const llmResults = ownResults(file, 'llm')
-  const humanResults = ownResults(file, 'human')
-  const llm = file.evaluators.find((e) => e.kind === 'llm')
-  const errors = llmResults.filter((r) => r.error).length
-  const drops = llmResults.reduce((n, r) => n + (r.issues ?? []).filter((i) => i.action === 'dropped').length, 0)
-
-  console.log(`FILE ${evalPath}`)
-  console.log(
-    `LLM ${llm?.model ?? '(none)'} · scored ${llmResults.filter(isScoredResult).length}/${total} · errors ${errors} · dropped-values ${drops}`
-  )
-  console.log(`HUMAN scored ${humanResults.filter(isScoredResult).length}/${total}`)
-  console.log(`UPDATED ${file.meta.updatedAt}`)
+  // No fingerprints here: this answers "how far along is this?", not "what may be scored onto it".
+  for (const line of summarizeEvalFile(file, evalPath)) console.log(line)
 }
 
 // ── dispatch ─────────────────────────────────────────────────────────────────

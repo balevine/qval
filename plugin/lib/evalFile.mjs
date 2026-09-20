@@ -27,9 +27,13 @@ export const HUMAN_EVALUATOR_ID = 'human'
 
 /**
  * The `provider` every LLM evaluator Qval writes now carries: the evaluation runs inside Claude
- * Code with the ambient model. A file from an older release may carry `'ollama'` or
- * `'anthropic'` instead. It still opens, still accepts a human eval, and still merges — nothing
- * reads this string except as a label and the model lock below.
+ * Code with the ambient model. This is the only definition of that string. The skill engine stamps
+ * it onto the evaluator and gates `PROVIDER_LOCKED` on it, so a second copy that drifted would
+ * refuse a file the engine itself had written.
+ *
+ * It is a record of what produced the scores already in a file, not a setting. A file from an older
+ * release carries `'ollama'` or `'anthropic'` instead, and still opens, still accepts a human eval,
+ * and still merges. What it will not do is continue that run, which is the lock's whole job.
  */
 export const CLAUDE_CODE_PROVIDER = 'claude-code'
 
@@ -187,6 +191,50 @@ export function evaluatedCount(file, kind) {
  */
 export function humanEvaluatedCount(file) {
   return evaluatedCount(file, 'human')
+}
+
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`
+
+/**
+ * The block both `status` commands print about an eval file: what it is, and how far along each of
+ * its two streams is. Returns the lines rather than printing them, so the CLI and the skill engine
+ * share one wording. They had each written their own, and the two had already drifted: one printed
+ * the model without the provider that qualifies it, so the same file described itself differently
+ * depending on which command you asked.
+ *
+ * @param {EvalFile} file
+ * @param {string} path Printed as-is. The caller resolved it; this does not touch the filesystem.
+ * @param {{fingerprints?: boolean}} [opts] `fingerprints` adds the DATASET and CONFIG lines. An
+ *   evaluation run needs them (they decide what it may score onto this file); a review session
+ *   asking how far along it is does not.
+ * @returns {string[]}
+ */
+export function summarizeEvalFile(file, path, opts = {}) {
+  const total = file.meta.dataset.ticketCount
+  const llmResults = ownResults(file, 'llm')
+  const llm = file.evaluators.find((e) => e.kind === 'llm')
+  const errors = llmResults.filter((r) => r.error).length
+  const drops = llmResults.reduce(
+    (n, r) => n + (r.issues ?? []).filter((i) => i.action === 'dropped').length,
+    0
+  )
+  // A missing provider and a missing model are named separately: which half is absent says whether
+  // the file predates the Claude Code conversion or the run never got as far as resolving a model.
+  const source = llm ? `${llm.provider ?? '(no provider)'} · ${llm.model ?? '(no model)'}` : '(none)'
+
+  const lines = [`FILE ${path}`]
+  if (opts.fingerprints) {
+    lines.push(`DATASET ${file.meta.dataset.fingerprint} · ${plural(total, 'ticket', 'tickets')}`)
+    lines.push(
+      `CONFIG ${file.meta.config.fingerprint} · ${plural(file.meta.config.schema.length, 'property', 'properties')}`
+    )
+  }
+  lines.push(
+    `LLM ${source} · scored ${evaluatedCount(file, 'llm')}/${total} · errors ${errors} · dropped-values ${drops}`
+  )
+  lines.push(`HUMAN scored ${evaluatedCount(file, 'human')}/${total}`)
+  lines.push(`UPDATED ${file.meta.updatedAt}`)
+  return lines
 }
 
 /**

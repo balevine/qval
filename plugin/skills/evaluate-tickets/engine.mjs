@@ -55,19 +55,22 @@ import { DEFAULT_SCHEMA, normalizeSchema, propertyErrors } from '../../lib/schem
 import { DEFAULT_RULES, normalizeRules } from '../../lib/rules.mjs'
 import { configFingerprint, datasetFingerprint } from '../../lib/fingerprint.mjs'
 import { defaultEvalPath, RUN_DIR, samePath } from '../../lib/paths.mjs'
+import { nowIso, pidAlive } from '../../lib/host.mjs'
 import { compilePrompt, SYSTEM_PROMPT } from '../../lib/promptCompiler.mjs'
 import { parseTicketsFile } from '../../lib/tickets.mjs'
 import { validateValues } from '../../lib/evalValidate.mjs'
 import { pluginVersion } from '../../lib/version.mjs'
 import {
   applyLlmResults,
+  CLAUDE_CODE_PROVIDER,
   createWorkingFile,
   isScoredResult,
   lockedLlmProvider,
   mergeResults,
   needsAttention,
   normalizeEvalFile,
-  ownResults
+  ownResults,
+  summarizeEvalFile
 } from '../../lib/evalFile.mjs'
 
 const EXIT = { OK: 0, USAGE: 1, INPUT: 2, SCAFFOLDED: 3 }
@@ -81,15 +84,15 @@ const REVIEW_SESSION_FILE = 'review-session.json'
 /** Tickets per batch when `--batch-size` says otherwise. Bigger batches mean fewer subagents and
  *  less overhead, but a truncated response loses more tickets at once. */
 const DEFAULT_BATCH_SIZE = 10
-/** Recorded on the evaluator: what produced these scores. */
-const PROVIDER = 'claude-code'
+// What produced these scores is recorded on the evaluator as `CLAUDE_CODE_PROVIDER`, imported from
+// lib/evalFile.mjs rather than spelled again here. It gates PROVIDER_LOCKED below, so a second copy
+// that drifted would refuse a file this very skill wrote.
 // `meta.appVersion` is read from the plugin manifest (see ../../lib/version.mjs), never kept here.
 // The manifest ships inside the plugin, so this works from a copied skill folder too, which is what
 // the old hard-coded constant was working around.
 
 const enginePath = fileURLToPath(import.meta.url)
 
-const nowIso = () => new Date().toISOString()
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`
 
 function fail(line, ...rest) {
@@ -353,17 +356,6 @@ async function refuseIfReviewLive(outDir, evalFilePath) {
   )
 }
 
-/** Is that pid still around? A record left behind by a killed server is not a live session. */
-function pidAlive(pid) {
-  if (typeof pid !== 'number') return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (err) {
-    return err?.code === 'EPERM'
-  }
-}
-
 async function loadContext() {
   const outDir = resolve(RUN_DIR)
   const ctx = await readJson(join(outDir, RUN_CONTEXT_FILE))
@@ -553,7 +545,7 @@ async function cmdPlan(args) {
     // One model scores every ticket in a file, and it fires on the same signal the
     // config lock does: a scored `llm` evaluator.
     const locked = lockedLlmProvider(file)
-    if (locked && locked.provider !== PROVIDER) {
+    if (locked && locked.provider !== CLAUDE_CODE_PROVIDER) {
       fail(
         `PROVIDER_LOCKED ${evalFilePath}`,
         `  Already scored by ${locked.provider ?? '(unknown)'} · ${locked.model ?? '(unknown)'}, not this skill.`,
@@ -604,7 +596,7 @@ async function cmdPlan(args) {
     rulesPath,
     schemaPath,
     outDir,
-    provider: PROVIDER,
+    provider: CLAUDE_CODE_PROVIDER,
     model,
     modelFrom: from,
     mode,
@@ -815,21 +807,8 @@ async function cmdStatus(args) {
   const file = raw ? normalizeEvalFile(raw) : null
   if (!file) fail(`BAD_EVAL_FILE ${evalFilePath}`, '  Missing, or not a valid .qval.json eval file.')
 
-  const total = file.meta.dataset.ticketCount
-  const llmResults = ownResults(file, 'llm')
-  const humanResults = ownResults(file, 'human')
-  const llm = file.evaluators.find((e) => e.kind === 'llm')
-  const errors = llmResults.filter((r) => r.error).length
-  const drops = llmResults.reduce((n, r) => n + (r.issues ?? []).filter((i) => i.action === 'dropped').length, 0)
-
-  console.log(`FILE ${evalFilePath}`)
-  console.log(`DATASET ${file.meta.dataset.fingerprint} · ${plural(total, 'ticket', 'tickets')}`)
-  console.log(`CONFIG ${file.meta.config.fingerprint} · ${plural(file.meta.config.schema.length, 'property', 'properties')}`)
-  console.log(
-    `LLM ${llm ? `${llm.provider ?? '(no provider)'} · ${llm.model ?? '(no model)'}` : '(none)'} · scored ${llmResults.filter(isScoredResult).length}/${total} · errors ${errors} · dropped-values ${drops}`
-  )
-  console.log(`HUMAN scored ${humanResults.filter(isScoredResult).length}/${total}`)
-  console.log(`UPDATED ${file.meta.updatedAt}`)
+  // With the fingerprints, which are what say whether a round may be scored onto this file.
+  for (const line of summarizeEvalFile(file, evalFilePath, { fingerprints: true })) console.log(line)
 }
 
 // ── dispatch ──────────────────────────────────────────────────────────────────

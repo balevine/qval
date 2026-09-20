@@ -12,7 +12,8 @@ import {
   mergeResults,
   needsAttention,
   normalizeEvalFile,
-  ownResults
+  ownResults,
+  summarizeEvalFile
 } from '@lib/evalFile.mjs'
 import type { EvalResult } from './types'
 import { DEFAULT_SCHEMA } from '@lib/schema.mjs'
@@ -87,6 +88,86 @@ describe('normalizeEvalFile', () => {
     const norm = normalizeEvalFile(raw)!
     expect(norm.meta.config.schema).toEqual(DEFAULT_SCHEMA) // [] → default
     expect(typeof norm.meta.config.rules).toBe('string')
+  })
+})
+
+describe('summarizeEvalFile', () => {
+  // Built by hand rather than through applyLlmResults/applyHumanValues: this is pure formatting,
+  // and the cases worth pinning (a provider without a model, no llm evaluator at all) are ones
+  // those two constructors will not produce.
+  const scored = (ticketId: number): EvalResult => ({
+    ticketId,
+    values: { resolved: true },
+    evaluatedAt: 't',
+    error: null
+  })
+  const withEvaluators = (evaluators: EvalFile['evaluators']): EvalFile => {
+    const f = working()
+    return { ...f, meta: { ...f.meta, updatedAt: '2026-07-09T00:00:00.000Z' }, evaluators }
+  }
+
+  it('names the provider and the model together, and counts the two streams separately', () => {
+    // The CLI used to print the model alone, so a file whose provider was `ollama` described itself
+    // as though it were this one. Both entry points read these lines out to the user verbatim.
+    const lines = summarizeEvalFile(
+      withEvaluators([
+        {
+          id: 'llm',
+          kind: 'llm',
+          name: 'LLM · Sonnet 5',
+          provider: 'claude-code',
+          model: 'Sonnet 5',
+          results: [scored(1), scored(2), { ticketId: 3, values: {}, evaluatedAt: 't', error: 'no answer' }]
+        },
+        { id: 'human', kind: 'human', name: 'Alice', results: [scored(1)] }
+      ]),
+      '/w/e.qval.json'
+    )
+
+    expect(lines[0]).toBe('FILE /w/e.qval.json')
+    expect(lines).toContainEqual('LLM claude-code · Sonnet 5 · scored 2/3 · errors 1 · dropped-values 0')
+    expect(lines).toContainEqual('HUMAN scored 1/3')
+    expect(lines.at(-1)).toBe('UPDATED 2026-07-09T00:00:00.000Z')
+    // Off by default: a review session asking how far along it is does not need them.
+    expect(lines.some((l) => l.startsWith('DATASET') || l.startsWith('CONFIG'))).toBe(false)
+  })
+
+  it('counts a dropped value without counting the ticket as errored', () => {
+    const lines = summarizeEvalFile(
+      withEvaluators([
+        {
+          id: 'llm',
+          kind: 'llm',
+          name: 'LLM · m',
+          provider: 'claude-code',
+          model: 'm',
+          results: [
+            { ...scored(1), issues: [{ key: 'resolved', action: 'dropped', original: 'maybe' }] },
+            { ...scored(2), issues: [{ key: 'resolved', action: 'clamped', original: 9 }] }
+          ]
+        }
+      ]),
+      'e.qval.json'
+    )
+    // Both tickets still scored, one value dropped, and a clamp is not a drop.
+    expect(lines).toContainEqual('LLM claude-code · m · scored 2/3 · errors 0 · dropped-values 1')
+  })
+
+  it('says which half is missing rather than collapsing an unidentified evaluator', () => {
+    expect(
+      summarizeEvalFile(withEvaluators([{ id: 'llm', kind: 'llm', name: 'LLM', results: [scored(1)] }]), 'e.qval.json')
+    ).toContainEqual('LLM (no provider) · (no model) · scored 1/3 · errors 0 · dropped-values 0')
+
+    // No llm evaluator at all is a different thing again, and reads as one.
+    expect(summarizeEvalFile(withEvaluators([]), 'e.qval.json')).toContainEqual(
+      'LLM (none) · scored 0/3 · errors 0 · dropped-values 0'
+    )
+  })
+
+  it('adds the fingerprints on request, which is what an evaluation run needs', () => {
+    const lines = summarizeEvalFile(withEvaluators([]), 'e.qval.json', { fingerprints: true })
+    expect(lines[1]).toBe('DATASET sha256:aaa · 3 tickets')
+    expect(lines[2]).toBe(`CONFIG sha256:bbb · ${DEFAULT_SCHEMA.length} properties`)
   })
 })
 
