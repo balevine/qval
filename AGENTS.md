@@ -4,7 +4,9 @@ Guidance for agentic coding tools working in this repo: where things live, the i
 
 **[`README.md`](README.md) is the authoritative definition of the application** — what Qval does, the ticket format, what each command is for, how the pieces fit. Read it first, and **keep it in sync whenever behavior changes**; a change that makes the README wrong is not finished. Where this file and the README overlap, the README is the one that has to be right, and the orientation below is a summary of it for working purposes.
 
-`.plans/` is a historical artifact: gitignored, unmaintained, and **not to be updated**. Nothing in the code or the docs cites it any more, and nothing should start: a comment that needs to justify a decision should state the reason itself rather than point at a document the reader may not have.
+`.plans/` is gitignored, and it is **where scratch and working documents go**. A review, a worklist, a set of notes to work through. Write them there rather than inventing another directory for them.
+
+The files already in there (`PROJECT_SPEC.md`, `REVIEW.md`, `SKILLIFY.md`) are historical artifacts and are unmaintained, so don't try to keep them current. **Nothing in the code or the docs cites `.plans/`**, and nothing should start. A comment that needs to justify a decision should state the reason itself rather than point at a document the reader may not have.
 
 ## What this is
 
@@ -86,5 +88,5 @@ Neo-brutalist, strictly **monochrome** black/white/grays, minimal, high-contrast
 
 - **There is no packaging any more.** `electron-builder.yml`, the release workflow, and the DMG are gone. Distribution is the plugin marketplace, and the whole shipped artifact is the `plugin/` folder. The last unsigned DMG stays on GitHub Releases for anyone with old files, which still open and still merge (they just carry an older `provider` string).
 - There is **no cost accounting**. Ambient generation isn't a metered API call, so there is nothing to estimate and no pre-run gate.
-- **Markdown is soft-wrapped**: one line per paragraph or bullet, no hard wrap at a fixed column (it reads badly at narrow widths). Applies to every `.md` in the repo, including `README.md` (user-facing), `.plans/`, and the skills' `SKILL.md`/`README.md`. `.notes/` is gitignored scratch.
+- **Markdown is soft-wrapped**: one line per paragraph or bullet, no hard wrap at a fixed column (it reads badly at narrow widths). Applies to every `.md` in the repo, including `README.md` (user-facing), `.plans/`, and the skills' `SKILL.md`/`README.md`.
 - Contribution rule: open an Issue before a PR.
