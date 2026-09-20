@@ -19,7 +19,7 @@ import { basename, dirname, extname, join, resolve } from 'node:path'
  *  but **not** safe to delete: a human evaluation lives here and has no other copy. */
 export const OUTPUT_DIR = 'qval-output'
 
-/** Scratch: compiled prompts, raw subagent output, run state, the review session record, settings,
+/** Scratch: compiled prompts, raw subagent output, run state, the review session record, settings.
  *  Hidden, gitignored, and safe to delete between runs, which `OUTPUT_DIR` is not. */
 export const RUN_DIR = '.qval-run'
 

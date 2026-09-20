@@ -4,9 +4,9 @@
 // left to the ambient Claude subagents is judgment (see SKILL.md).
 //
 // Subcommands:
-//   init                  copy the missing starter files (EVAL_RULES.md, EVAL_SCHEMA.json) into
-//                         the current directory. Exits 3 when it created one, meaning "stop here
-//                         and let the user edit them".
+//   init                  write the missing config files (EVAL_RULES.md, EVAL_SCHEMA.json) into
+//                         the current directory from the starter constants. Exits 3 when it created
+//                         one, meaning "stop here and let the user edit them".
 //   config [--check]      validate the config and print the property table + config fingerprint
 //          [--write]      rewrite EVAL_SCHEMA.json in normalized form (after a passing check)
 //          [--preview]    print the compiled static prefix the model will read

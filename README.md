@@ -66,7 +66,7 @@ A ticket file is JSON: either `{ meta, tickets: [...] }` or a bare array of tick
 
 Only the integer `id` is required, and it only has to be unique within the file. Everything else is filled in when it's missing, so a thin export still works: `status` falls back to `open` (the recognized values are `new`, `open`, `pending`, `on-hold`, `solved`, `closed`), and absent text becomes empty. Unknown fields are ignored, so you can leave whatever else your helpdesk exports in place. `messages[0]` is read as the opening message and the rest as the conversation in order; `isStaff` is what separates your agents from the customer in the rendered prompt.
 
-**Exporting your own data is a supported path, not a workaround.** Write a small script that maps your helpdesk's export into the shape above and you are done — nothing downstream cares where the file came from.
+**Exporting your own data is a supported path, not a workaround.** Write a small script that maps your helpdesk's export into the shape above and you are done. Nothing downstream cares where the file came from.
 
 ## Usage
 
@@ -103,6 +103,8 @@ This starts a local server and opens a browser tab at it. Claude prints the URL 
 
 The session runs **detached** and outlives the command that started it, because scoring a few hundred tickets by hand takes an hour and no Bash timeout survives that. Come back whenever and ask Claude how it went.
 
+Only one session runs per directory. Asking again while one is open hands you back the same URL rather than starting a second server, and asking for a *different* eval file is refused with the path of the one already open. Click **FINISH** in that tab first.
+
 With no argument the CLI works out what to open, which is the single `*.qval.json` in `qval-output/`, or a single ticket file if you have not run an evaluation yet. A directory with several datasets and no eval file is refused with the list rather than guessed at. Re-opening an existing eval file is never ambiguous, however many datasets are lying around: it names its tickets by fingerprint, so the right ones are found without asking.
 
 In the tab:
@@ -112,7 +114,7 @@ In the tab:
 - **MERGE** adds other people's eval files as read-only comparisons (below).
 - **FINISH** ends the session. Ask Claude how it went and it will report the counts back.
 
-> **Config lock.** Once an evaluation has any real score, its schema and rules **freeze**, so a file's data can never contradict the config it declares. Once it has an LLM score, its model is **pinned** too. Scoring the same tickets under different criteria means a **new eval file** — `/qval:evaluate-tickets` with `--eval-file <new path>` — which is exactly what merging gates on. There is no unlocking in place.
+> **Config lock.** Once an evaluation has any real score, its schema and rules **freeze**, so a file's data can never contradict the config it declares. Once it has an LLM score, its model is **pinned** too. Scoring the same tickets under different criteria means a **new eval file** (`/qval:evaluate-tickets` with `--eval-file <new path>`), which is exactly what merging gates on. There is no unlocking in place.
 
 > **One writer at a time.** The review session and the evaluation skill write the same file, and a review session holds it open for as long as you are scoring. Running an evaluation against a file a live session has open is refused rather than allowed to overwrite your work, and the review server picks up an evaluation that landed underneath it rather than writing over it. Click **FINISH** before starting a run and neither comes up.
 
@@ -120,7 +122,7 @@ In the tab:
 
 ### 3. Merge and compare
 
-**MERGE** offers the other `*.qval.json` files in `qval-output/`, so bringing a colleague's file into the comparison means dropping it in there. To bring in one from somewhere else, name it when you start the review and Claude passes it along (`--compare ../alice/tickets.qval.json`). The browser is only ever shown the names, never the paths. A file is accepted only if it matches **both** the dataset and the schema and rules of your working file, otherwise it is refused on its own row with the specific reason.
+**MERGE** offers the other `*.qval.json` files in `qval-output/` (and any an older version left loose in the working directory), so bringing a colleague's file into the comparison means dropping it in there. To bring in one from somewhere else, name it when you start the review and Claude passes it along (`--compare ../alice/tickets.qval.json`). The browser is only ever shown the names, never the paths. A file is accepted only if it matches **both** the dataset and the schema and rules of your working file, otherwise it is refused on its own row with the specific reason.
 
 All LLM evaluators pool into one group and all humans into another. They are never combined into a single number. Per ticket and per property you get each group's aggregate (score mean and standard deviation, boolean and enum majority and agreement, multi-select selection rates) and the **comparison** between them (score Δ, majority match, or set overlap), plus a dataset-level roll-up of how closely the model tracks human judgment. The results table has **Compare / LLM / Human** view modes, and any ticket opens to the full side-by-side.
 
@@ -179,7 +181,7 @@ The only thing in the repo that needs building is the UI. `vite` and `vite-plugi
 
 Scripts: `npm test` (unit + integration), `npm run typecheck`, `npm run check:ui` (rebuilds the bundle and fails if the committed copy has drifted), `npm run dev` (vite dev server for the UI, which has no API of its own, so point it at a running review server with `QVAL_DEV_SERVER=http://127.0.0.1:PORT`).
 
-**This README is the authoritative definition of Qval** — if a change makes something here wrong, the change isn't done until it's fixed. [`AGENTS.md`](AGENTS.md) is a companion for coding agents, covering how to work in the repo rather than what the app is.
+**This README is the authoritative definition of Qval.** If a change makes something here wrong, the change isn't done until it's fixed. [`AGENTS.md`](AGENTS.md) is a companion for coding agents, covering how to work in the repo rather than what the app is.
 
 ---
 
