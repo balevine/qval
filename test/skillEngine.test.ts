@@ -19,7 +19,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, wr
 import { tmpdir } from 'node:os'
 import { join, relative, resolve } from 'node:path'
 
-import { normalizeEvalFile } from '@lib/evalFile.mjs'
+import { applyHumanValues, normalizeEvalFile } from '@lib/evalFile.mjs'
 import { configFingerprint, datasetFingerprint } from '@lib/fingerprint.mjs'
 import { normalizeSchema } from '@lib/schema.mjs'
 import { SYSTEM_PROMPT } from '@lib/promptCompiler.mjs'
@@ -637,22 +637,59 @@ describe('refusals', () => {
     expect(locked.err).toContain('anthropic')
   })
 
-  it('trips the stale-file guard when the eval file changes between plan and assemble', () => {
+  it('assembles onto an eval file a review session edited while the round was out', () => {
     const dir = makeDir()
     plan(dir)
     respond(dir, 0, (ids) => answer(ids))
 
-    // The app saving a human edit while the round was out with the subagents.
+    // A review session saving one hand-entered score mid-round: `updatedAt` moves, both
+    // fingerprints hold. This is the ordinary case, and it must not cost the round.
+    const edited = applyHumanValues(readEval(dir), {
+      name: 'Bri',
+      ticketId: 2,
+      values: { empathy: 2 },
+      now: '2030-01-01T00:00:00.000Z'
+    })
+    writeRaw(dir, { ...edited, meta: { ...edited.meta, updatedAt: '2030-01-01T00:00:00.000Z' } })
+
+    const run = assemble(dir)
+    expect(run.code).toBe(0)
+    expect(run.outToken).toBe('ASSEMBLED')
+
+    // Both halves survive: the round's scores landed and the hand-entered one was not overwritten.
+    const file = readEval(dir)
+    expect(resultFor(file, 1)?.values).toMatchObject(GOOD)
+    const human = file.evaluators.find((e) => e.kind === 'human')!
+    expect(human.results.find((r) => r.ticketId === 2)?.values).toEqual({ empathy: 2 })
+  })
+
+  it('refuses to assemble onto an eval file that has become a different evaluation', async () => {
+    const dir = makeDir()
+    plan(dir)
+    respond(dir, 0, (ids) => answer(ids))
+
+    // Criteria re-stamped since `plan`. These answers describe a schema the file no longer holds,
+    // and `assemble` validates against the file's own schema, so adopting it would score the round
+    // against criteria its prompts never described.
     const raw = readRaw(dir)
-    raw.meta.updatedAt = '2030-01-01T00:00:00.000Z'
+    raw.meta.config.rules = 'Score something else entirely.'
+    raw.meta.config.fingerprint = await configFingerprint(normalizeSchema(SCHEMA), raw.meta.config.rules)
     writeRaw(dir, raw)
 
     const run = assemble(dir)
     expect(run.code).toBe(2)
-    expect(run.errToken).toBe('STALE_FILE')
-    expect(run.err).toContain('changed on disk')
-    // Refusing means refusing to write: the file is exactly as the app left it.
+    expect(run.errToken).toBe('FILE_REPLACED')
+    expect(run.err).toContain('criteria')
+    // Refusing means refusing to write: the file is exactly as the session left it.
     expect(readRaw(dir)).toEqual(raw)
+
+    // The other half of the same guard: an evaluation of different tickets.
+    raw.meta.config.fingerprint = readContext(dir).configFingerprint
+    raw.meta.dataset.fingerprint = raw.meta.dataset.fingerprint.replace(/.$/, (c: string) => (c === 'a' ? 'b' : 'a'))
+    writeRaw(dir, raw)
+    const other = assemble(dir)
+    expect(other).toMatchObject({ code: 2, errToken: 'FILE_REPLACED' })
+    expect(other.err).toContain('different tickets')
   })
 
   it('refuses to plan or assemble while a review session holds the same eval file', () => {

@@ -131,7 +131,11 @@ It prints `ASSEMBLED`, then `EVALUATED`, `DROPPED`, `FAILED`, **`NEEDS_RETRY`**,
 
   Round 1 always prints `NEEDS_RETRY 0`, since the retry is capped at one round. Anything still unresolved is printed on a **`RESIDUAL n`** line instead. **Do not loop.** Report the residual; a genuinely unscoreable ticket stays in the file as an error, and the user can re-plan with `--mode remaining` later if they want.
 
-Failures here: `SESSION_LIVE` (exit 2) means a review session opened on this file while the subagents were out — ask the user to click FINISH, then re-run `plan`. `STALE_FILE` (exit 2) means the file changed on disk since `plan` some other way; same answer. `NOT_ASSEMBLED` means round 0 hasn't been assembled yet. `RETRY_CAPPED` means you passed a round other than 1.
+Failures here:
+
+- `SESSION_LIVE` (exit 2) means a review session opened on this file while the subagents were out. Ask the user to click FINISH in that tab, then **run the same `assemble --round <n>` again**. The subagents' answers are still on disk and nothing needs re-planning. Re-run `plan` only if that second attempt also refuses, since `plan` deletes those batch files and throws the round away.
+- `FILE_REPLACED` (exit 2) means the eval file is no longer the same evaluation: different tickets, or scoring criteria that changed since `plan`. Re-planning is the only answer here, because these answers were written against the old schema and rules. An ordinary human edit does not cause this — `assemble` merges onto the newer file and leaves the human evaluation alone.
+- `NOT_ASSEMBLED` means round 0 hasn't been assembled yet. `RETRY_CAPPED` means you passed a round other than 1.
 
 ## Step 8. Report and hand off
 

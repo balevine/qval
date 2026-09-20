@@ -390,19 +390,36 @@ async function loadContext() {
 }
 
 /**
- * Load the run's eval file and refuse if it changed on disk since `plan` recorded its `updatedAt`.
- * A review session writes the same file on every human edit, so without this guard an `assemble`
- * could overwrite a human evaluation made while the run was out with the subagents.
+ * Load the run's eval file from disk, refusing only if it has become a *different* evaluation.
+ *
+ * A review session writes this same file on every human edit, so it very often changes while a
+ * round is out with the subagents. That is fine and we take the newer copy: `applyLlmResults`
+ * rebuilds only the `llm` evaluator, keyed by ticket id, so a human evaluation made meanwhile
+ * survives untouched. Refusing on a mere timestamp change cost a whole round of subagent work to
+ * protect something that was never at risk.
+ *
+ * The two fingerprints are what actually has to hold, and the config half is load-bearing rather
+ * than belt-and-braces. `assemble` validates the batch files against the *file's* schema, so
+ * adopting a copy whose criteria a review session had re-stamped would score this round against a
+ * schema its prompts never described. `Workspace.adoptExternalWrite` guards the other direction
+ * with the same comparison.
  */
 async function loadRunEvalFile(ctx) {
   const raw = await readJson(ctx.evalFilePath)
   const file = raw ? normalizeEvalFile(raw) : null
   if (!file) fail(`BAD_EVAL_FILE ${ctx.evalFilePath}`, '  Missing, or not a valid .qval.json eval file.')
-  if (file.meta.updatedAt !== ctx.evalUpdatedAt) {
+  if (file.meta.dataset.fingerprint !== ctx.datasetFingerprint) {
     fail(
-      `STALE_FILE ${ctx.evalFilePath}`,
-      '  It changed on disk since this run was planned (a review session may have it open).',
-      '  Close that tab and re-run `plan`. Writing now would overwrite those edits.'
+      `FILE_REPLACED ${ctx.evalFilePath}`,
+      '  It is an evaluation of different tickets than the one this run planned.',
+      '  Re-run `plan`. Writing now would mix two datasets into one file.'
+    )
+  }
+  if (file.meta.config.fingerprint !== ctx.configFingerprint) {
+    fail(
+      `FILE_REPLACED ${ctx.evalFilePath}`,
+      '  Its scoring criteria changed since this run was planned (a review session can re-stamp them).',
+      '  Re-run `plan`. These answers were written against the old schema and rules.'
     )
   }
   return file
@@ -612,8 +629,6 @@ async function cmdPlan(args) {
     batchSize,
     datasetFingerprint: datasetFp,
     configFingerprint: configFp,
-    // Stale-file guard, re-stamped on every write we make ourselves.
-    evalUpdatedAt: file.meta.updatedAt,
     targetIds: targets.map((t) => t.id),
     round: 0,
     assembled: []
@@ -724,7 +739,6 @@ async function cmdAssemble(args) {
   const written = { ...next, meta: { ...next.meta, updatedAt: nowIso() } }
   await atomicWriteJson(ctx.evalFilePath, written)
 
-  ctx.evalUpdatedAt = written.meta.updatedAt
   ctx.round = round
   ctx.assembled = [...new Set([...(ctx.assembled ?? []), round])].sort((a, b) => a - b)
   writeJsonSync(join(outDir, RUN_CONTEXT_FILE), ctx)
