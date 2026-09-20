@@ -27,8 +27,10 @@ Several datasets in one place is ordinary (Qbort keeps every run under its own t
 Read the first token of stdout:
 
 - **`SERVING`** — followed by `URL`, `WORKING_FILE`, `DATASET`, `CANDIDATES` (how many other eval files it found to merge), and `OPENED yes|no`. Go to Step 2.
-- **`ALREADY_SERVING`** — a session is already live here. Give the user that `URL` again. Do not start another.
-- **Exit 2**: `NO_DATASET` (nothing here to review — **ask the user where their ticket file is** and re-run with that path; don't assume they have one to generate), `AMBIGUOUS` (it lists the candidates — **ask the user which one with `AskUserQuestion`**, then re-run with that path), `MISSING_FILE`, `BAD_TICKETS`, `SERVER_FAILED`, `SERVER_TIMEOUT`.
+- **`ALREADY_SERVING`** — a session is already live here, on the file that was asked for. Give the user that `URL` again. Do not start another.
+- **Exit 2**: `NO_DATASET` (nothing here to review — **ask the user where their ticket file is** and re-run with that path; don't assume they have one to generate), `AMBIGUOUS` (it lists the candidates — **ask the user which one with `AskUserQuestion`**, then re-run with that path), `ALREADY_SERVING_OTHER_FILE` (see below), `MISSING_FILE`, `BAD_TICKETS`, `SERVER_FAILED`, `SERVER_TIMEOUT`.
+
+Only one review session runs per directory. `ALREADY_SERVING_OTHER_FILE` means a session is open on the file named on its `OPEN` line, which is not the one asked for. Tell the user which file is open, give them its `URL`, and say they have to click **Finish** there before the other one can be opened. Do not re-run `serve` until they say they have.
 - **Exit 1**: a bad flag. Fix the command.
 
 Optional flags: `--compare a.qval.json,b.qval.json` (offer files from elsewhere for merging, on top of the ones found in `qval-output/`), `--port N`, `--no-open`.

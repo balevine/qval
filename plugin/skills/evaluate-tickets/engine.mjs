@@ -44,11 +44,10 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
-  realpathSync,
   rmSync,
   writeFileSync
 } from 'node:fs'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { flagValue, parseArgs } from '../../lib/args.mjs'
@@ -56,7 +55,7 @@ import { atomicWriteJson, readJson } from '../../lib/fsUtil.mjs'
 import { normalizeSchema, propertyErrors } from '../../lib/schema.mjs'
 import { normalizeRules } from '../../lib/rules.mjs'
 import { configFingerprint, datasetFingerprint } from '../../lib/fingerprint.mjs'
-import { defaultEvalPath, RUN_DIR } from '../../lib/paths.mjs'
+import { defaultEvalPath, RUN_DIR, samePath } from '../../lib/paths.mjs'
 import { compilePrompt, SYSTEM_PROMPT } from '../../lib/promptCompiler.mjs'
 import { parseTicketsFile } from '../../lib/tickets.mjs'
 import { validateValues } from '../../lib/evalValidate.mjs'
@@ -334,41 +333,13 @@ function resolveModel(args) {
 async function refuseIfReviewLive(outDir, evalFilePath) {
   const record = await readJson(join(outDir, REVIEW_SESSION_FILE))
   if (record?.status !== 'live' || !pidAlive(record.pid)) return
-  if (!record.workingPath || canonicalPath(record.workingPath) !== canonicalPath(evalFilePath)) return
+  if (!samePath(record.workingPath, evalFilePath)) return
   fail(
     `SESSION_LIVE ${evalFilePath}`,
     '  A review session (`/qval:review`) has this eval file open and is writing to it.',
     '  Ask the user to click FINISH in that tab, then re-run.',
     `  URL ${record.url ?? '(unknown)'}`
   )
-}
-
-/**
- * Turn a path into one canonical form, so that two ways of writing the same file compare as equal.
- *
- * Symlinks are the reason. On macOS `/var` is a symlink to `/private/var`, so one process can write
- * `/var/…/tickets.qval.json` into the session record while another reads the same file as
- * `/private/var/…/tickets.qval.json`. Comparing the two as plain strings says they are different
- * files, and the check above would never fire.
- *
- * The file does not have to exist yet, and often does not: `qval-output/` is created by the run
- * this is called from. So this resolves the closest parent directory that does exist and puts the
- * remaining names back on the end.
- */
-function canonicalPath(p) {
-  const abs = resolve(p)
-  const tail = []
-  let head = abs
-  for (;;) {
-    try {
-      return join(realpathSync(head), ...tail)
-    } catch {
-      const parent = dirname(head)
-      if (parent === head) return abs // walked to the root without finding anything real
-      tail.unshift(basename(head))
-      head = parent
-    }
-  }
 }
 
 /** Is that pid still around? A record left behind by a killed server is not a live session. */

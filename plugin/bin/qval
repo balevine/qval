@@ -31,7 +31,7 @@ import { normalizeSchema } from '../lib/schema.mjs'
 import { normalizeRules } from '../lib/rules.mjs'
 import { configFingerprint } from '../lib/fingerprint.mjs'
 import { isScoredResult, looksLikeEvalFile, normalizeEvalFile, ownResults } from '../lib/evalFile.mjs'
-import { defaultEvalPath, evalSearchDirs, OUTPUT_DIR, RUN_DIR } from '../lib/paths.mjs'
+import { defaultEvalPath, evalSearchDirs, OUTPUT_DIR, RUN_DIR, samePath } from '../lib/paths.mjs'
 import { parseTicketsFile } from '../lib/tickets.mjs'
 import { SettingsStore } from '../lib/settingsStore.mjs'
 import { pluginVersion } from '../lib/version.mjs'
@@ -153,26 +153,42 @@ const forDisplay = (dir, paths) => paths.map((p) => `  ${relative(dir, p) || bas
  * mislink. Several ticket files in one directory is ordinary (accumulated exports, or one file per
  * generated run), and refusing to relink there would break re-opening a review for no reason.
  */
+/**
+ * The eval file a named target means, on its own, without the dataset hunt that usually goes with
+ * it. A `*.qval.json` path is its own answer. Anything else has to be ticket data, and the answer
+ * is the eval file `serve` would create for it.
+ *
+ * Split out because the live-session check needs this much and no more. Working out the dataset as
+ * well can exit 2 on a directory the user is not asking about, which would turn a plain
+ * `qval serve` into a failure in the one case it is there to handle.
+ */
+async function evalPathForTarget(target, dir) {
+  const path = resolve(target)
+  if (!existsSync(path)) fail(`MISSING_FILE ${path}`)
+  if (isEvalName(path)) return path
+  if (!(await isTicketsFile(path))) {
+    fail(
+      `BAD_TICKETS ${path}`,
+      '  Not ticket data and not a *.qval.json eval file.',
+      '  Expected `{ meta, tickets: [...] }` or a bare array, each ticket with an integer `id`.'
+    )
+  }
+  return defaultEvalPath(dir, path)
+}
+
 async function resolveTarget(target, dir) {
   if (target) {
     const path = resolve(target)
-    if (!existsSync(path)) fail(`MISSING_FILE ${path}`)
+    const evalPath = await evalPathForTarget(target, dir)
     if (isEvalName(path)) {
       // Look for the dataset in the working directory *and* beside the eval file. An eval file now
       // lives in `qval-output/`, which holds no tickets, and one passed in from someone else's
       // directory may have its dataset there instead. The fingerprint picks which is right, so
       // offering both can't mislink — offering neither is what would fail.
       const beside = dirname(path) === dir ? [] : await ticketsFilesIn(dirname(path))
-      return { evalPath: path, ticketsPaths: [...new Set([...(await ticketsFilesIn(dir)), ...beside])] }
+      return { evalPath, ticketsPaths: [...new Set([...(await ticketsFilesIn(dir)), ...beside])] }
     }
-    if (!(await isTicketsFile(path))) {
-      fail(
-        `BAD_TICKETS ${path}`,
-        '  Not ticket data and not a *.qval.json eval file.',
-        '  Expected `{ meta, tickets: [...] }` or a bare array, each ticket with an integer `id`.'
-      )
-    }
-    return { evalPath: defaultEvalPath(dir, path), ticketsPaths: [path] }
+    return { evalPath, ticketsPaths: [path] }
   }
 
   const evals = evalFilesIn(dir)
@@ -316,9 +332,24 @@ async function cmdServe(args) {
   const outDir = outDirOf()
   const recordPath = sessionFileOf()
 
-  // A session already running here is the common re-ask ("open it again"), not an error.
+  // A session already running here is the common re-ask ("open it again"), not an error. It is only
+  // that when the file it holds is the file being asked for, though. One session runs per
+  // directory (this record is named from the working directory, not from any eval file), so asking
+  // for a second file is a request that cannot be met, and handing back the running session's URL
+  // would answer it with somebody else's evaluation.
   const existing = await readJson(recordPath)
   if (existing?.status === 'live' && pidAlive(existing.pid)) {
+    const asked = args._[0] ? await evalPathForTarget(args._[0], dir) : null
+    if (asked && existing.workingPath && !samePath(asked, existing.workingPath)) {
+      fail(
+        `ALREADY_SERVING_OTHER_FILE ${asked}`,
+        '  A review session is already open in this directory, on a different eval file.',
+        `  OPEN ${existing.workingPath}`,
+        '  Only one session runs per directory, so that one has to end before this one can start.',
+        '  Ask the user to click FINISH in that tab, then re-run.',
+        `  URL ${existing.url ?? '(unknown)'}`
+      )
+    }
     console.log('ALREADY_SERVING')
     console.log(`URL ${existing.url}`)
     console.log(`WORKING_FILE ${existing.workingPath}`)

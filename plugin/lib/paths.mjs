@@ -10,8 +10,8 @@
 //
 // Node-only (`node:fs`, `node:path`), so nothing the renderer imports may import this.
 
-import { existsSync } from 'node:fs'
-import { basename, dirname, extname, join } from 'node:path'
+import { existsSync, realpathSync } from 'node:fs'
+import { basename, dirname, extname, join, resolve } from 'node:path'
 
 /** Durable artifacts: the `*.qval.json` eval files and the `*.report.json` exports. Named after
  *  Qbort's `qbort-output/`, and for the same reason — generated files belong somewhere, not loose
@@ -73,3 +73,37 @@ export function defaultEvalPath(dir, datasetPath, exists = existsSync) {
  * @returns {string[]}
  */
 export const evalSearchDirs = (dir) => [join(dir, OUTPUT_DIR), dir]
+
+/**
+ * Turn a path into one canonical form, so that two ways of writing the same file compare as equal.
+ *
+ * Symlinks are the reason. On macOS `/var` is a symlink to `/private/var`, so one process can write
+ * `/var/…/tickets.qval.json` into the session record while another reads the same file as
+ * `/private/var/…/tickets.qval.json`. Comparing the two as plain strings says they are different
+ * files, and a check that two processes are holding the same one would never fire.
+ *
+ * The file does not have to exist yet, and often does not (`qval-output/` is created by the run
+ * that calls this). So this resolves the closest parent directory that does exist and puts the
+ * remaining names back on the end.
+ *
+ * @param {string} p
+ * @returns {string}
+ */
+export function canonicalPath(p) {
+  const abs = resolve(p)
+  const tail = []
+  let head = abs
+  for (;;) {
+    try {
+      return join(realpathSync(head), ...tail)
+    } catch {
+      const parent = dirname(head)
+      if (parent === head) return abs // walked to the root without finding anything real
+      tail.unshift(basename(head))
+      head = parent
+    }
+  }
+}
+
+/** Do two paths name the same file, allowing for symlinks and for either one not existing yet? */
+export const samePath = (a, b) => Boolean(a) && Boolean(b) && canonicalPath(a) === canonicalPath(b)

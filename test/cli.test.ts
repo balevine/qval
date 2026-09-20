@@ -327,6 +327,40 @@ describe('serve: what it opens', () => {
     expect(second.out.split('\n')[0]).toBe('ALREADY_SERVING')
     expect(field(second.out, 'URL')).toBe(field(first.out, 'URL'))
   })
+
+  it('hands back the live URL when the file asked for is the one already open', async () => {
+    const cwd = await home('twice-named')
+    const first = qval(cwd, ['serve', 'tickets.json', '--no-open'])
+    const second = qval(cwd, ['serve', 'tickets.json', '--no-open'])
+
+    expect(second.status).toBe(0)
+    expect(second.out.split('\n')[0]).toBe('ALREADY_SERVING')
+    expect(field(second.out, 'URL')).toBe(field(first.out, 'URL'))
+  })
+
+  it('refuses a second file rather than handing back the open session on a different one', async () => {
+    const other = TICKETS.map((t) => ({ ...t, subject: `Other ${t.id}` }))
+    const cwd = await home('two-datasets', { 'other.json': other })
+    qval(cwd, ['serve', 'tickets.json', '--no-open'])
+
+    const second = qval(cwd, ['serve', 'other.json', '--no-open'])
+    expect(second.status).toBe(2)
+    expect(second.err).toMatch(/^ALREADY_SERVING_OTHER_FILE/)
+    // Both files named, so the user can tell which is which, and the URL to go and finish.
+    expect(second.err).toContain(outPath(cwd, 'other.qval.json'))
+    expect(second.err).toContain(`OPEN ${outPath(cwd, 'tickets.qval.json')}`)
+    expect(second.err).toMatch(/URL http:\/\/127\.0\.0\.1:\d+/)
+    // And it stayed a refusal: the live session is untouched, not replaced.
+    expect((await readRecord(cwd))!.workingPath).toBe(outPath(cwd, 'tickets.qval.json'))
+  })
+
+  it('still reports a bad path as a bad path while a session is live', async () => {
+    const cwd = await home('live-bad-path', { 'notes.json': { hello: 'world' } })
+    qval(cwd, ['serve', 'tickets.json', '--no-open'])
+
+    expect(qval(cwd, ['serve', 'notes.json', '--no-open']).err).toMatch(/^BAD_TICKETS/)
+    expect(qval(cwd, ['serve', 'nope.json', '--no-open']).err).toMatch(/^MISSING_FILE/)
+  })
 })
 
 // --- Opening a browser -------------------------------------------------------
