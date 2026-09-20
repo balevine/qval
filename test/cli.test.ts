@@ -397,6 +397,11 @@ describe('status', () => {
     expect(field(live.out, 'URL')).toBe(url)
     expect(live.out).toMatch(/HUMAN scored 0\/2/)
 
+    // A live record holds the URL, and the URL holds the session token, so it must never be
+    // readable by anyone else on the machine. Written owner-only, not narrowed after the fact.
+    const recordPath = join(cwd, '.qval-run', 'review-session.json')
+    expect((await fs.stat(recordPath)).mode & 0o777).toBe(0o600)
+
     // Score one ticket by hand, then finish, exactly as the browser does.
     await post(url, '/api/config', { schema: [{ key: 'empathy', label: 'Empathy', type: 'score', min: 1, max: 5, step: 1 }] })
     await post(url, '/api/result', { ticketId: 1, values: { empathy: 4 } })

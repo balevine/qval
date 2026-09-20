@@ -300,16 +300,12 @@ async function writeConfigForEngine(settings, dir, seededFingerprint) {
 // ── the session record ────────────────────────────────────────────────────────
 
 /**
- * Write the record `status` reads back. Chmod'd to the owner because a live record holds the URL,
- * and the URL holds the session token.
+ * Write the record `status` reads back. Owner-only, because a live record holds the URL and the URL
+ * holds the session token. The mode is set as the file is created rather than corrected afterwards,
+ * so the token is never on disk at the default umask, not even for the width of one write.
  */
 async function writeRecord(path, record) {
-  await atomicWriteJson(path, record)
-  try {
-    await fs.chmod(path, 0o600)
-  } catch {
-    /* best effort — a filesystem without modes is not a reason to fail the run */
-  }
+  await atomicWriteJson(path, record, { mode: 0o600 })
 }
 
 /** Is that pid still around? Used to tell a live session from one that died without saying so. */

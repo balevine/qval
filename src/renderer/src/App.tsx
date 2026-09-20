@@ -8,7 +8,7 @@ import { ToastProvider, useToast } from '@/state/ToastContext'
 import { SettingsProvider, useSettings } from '@/state/SettingsContext'
 import { SessionProvider, useSession } from '@/state/SessionContext'
 import { errorMessage } from '@/lib/format'
-import { api } from '@/lib/apiClient'
+import { api, releaseSessionLease } from '@/lib/apiClient'
 
 function EmptyState({ loading }: { loading: boolean }) {
   return (
@@ -63,6 +63,11 @@ function AppShell() {
       // rules back to the evaluation skill, so a debounced edit has to land before we say we're done.
       await flush()
       await api.review.done()
+      // The server stops the moment it has answered that, so drop the lease now. It is an
+      // `EventSource`, which would otherwise reconnect to the closed port every few seconds for as
+      // long as the tab is left open. After the call, never before: letting go early would read as
+      // the tab having gone away and record the session as abandoned.
+      releaseSessionLease()
       setFinished(true)
     } catch (e) {
       toast(errorMessage(e, 'Could not end the session'), 'error')

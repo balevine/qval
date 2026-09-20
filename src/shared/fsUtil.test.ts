@@ -35,6 +35,22 @@ describe('atomicWriteJson / readJson', () => {
     expect(leftovers).toEqual([])
   })
 
+  it('honours an explicit mode, and never widens an existing file', async () => {
+    const file = join(dir, 'secret.json')
+    await atomicWriteJson(file, { token: 'abc' }, { mode: 0o600 })
+    expect((await fs.stat(file)).mode & 0o777).toBe(0o600)
+    // The record is rewritten as the session changes state, and every rewrite has to stay owner-only.
+    await atomicWriteJson(file, { token: 'abc', status: 'done' }, { mode: 0o600 })
+    expect((await fs.stat(file)).mode & 0o777).toBe(0o600)
+  })
+
+  it('does not narrow an ordinary write', async () => {
+    const file = join(dir, 'data.json')
+    await atomicWriteJson(file, { ok: true })
+    // Whatever the umask makes of 0o666, it is readable by its owner and was not forced to 0o600.
+    expect((await fs.stat(file)).mode & 0o400).toBe(0o400)
+  })
+
   it('returns null for a missing file and for malformed JSON', async () => {
     expect(await readJson(join(dir, 'nope.json'))).toBeNull()
     await fs.writeFile(join(dir, 'bad.json'), '{ not: json', 'utf-8')

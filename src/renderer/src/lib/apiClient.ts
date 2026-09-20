@@ -58,6 +58,9 @@ export function sessionToken(): string {
   return cachedToken
 }
 
+/** The one open stream, held so that it can be let go of deliberately. */
+let lease: EventSource | null = null
+
 /**
  * Hold the review session open. The server treats an `/api/events` stream as the lease on this tab:
  * while it is connected the session is live, and once it has been gone for the grace period the run
@@ -68,7 +71,21 @@ export function sessionToken(): string {
  * @param baseUrl same-origin by default
  */
 export function holdSessionLease(baseUrl = ''): void {
-  new EventSource(`${baseUrl}/api/events?${TOKEN_PARAM}=${encodeURIComponent(sessionToken())}`)
+  lease?.close()
+  lease = new EventSource(`${baseUrl}/api/events?${TOKEN_PARAM}=${encodeURIComponent(sessionToken())}`)
+}
+
+/**
+ * Let the lease go. Only correct once the server is on its way down. The stream *is* the lease, so
+ * dropping it while the server still runs starts the grace period and the session is recorded as
+ * abandoned rather than done.
+ *
+ * It has to be dropped by hand. `EventSource` reconnects on its own and never gives up, so without
+ * this the finished tab spends the rest of its life retrying a port that closed.
+ */
+export function releaseSessionLease(): void {
+  lease?.close()
+  lease = null
 }
 
 export interface ApiClientOptions {
