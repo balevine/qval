@@ -38,10 +38,7 @@ function FinishedState({ workingPath }: { workingPath: string | null }) {
       <div className="brutal-box max-w-md p-8 text-center">
         <Check className="mx-auto h-10 w-10" strokeWidth={1.5} />
         <h1 className="mt-4 font-mono text-lg font-bold uppercase tracking-widest">Review finished</h1>
-        <p className="mt-2 text-sm text-ink/60">
-          Everything is saved. You can close this tab — ask Claude Code how the session went and it will
-          report the counts back.
-        </p>
+        <p className="mt-2 text-sm text-ink/60">Everything is saved. You can close this tab.</p>
         {workingPath ? <p className="mt-4 break-all font-mono text-[11px] text-ink/40">{workingPath}</p> : null}
       </div>
     </div>
