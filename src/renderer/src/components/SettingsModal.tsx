@@ -6,13 +6,10 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog'
-import { ProviderConfig } from '@/components/ProviderConfig'
 import { SchemaEditor } from '@/components/SchemaEditor'
 import { RulesEditor } from '@/components/RulesEditor'
 import { StorageSettings } from '@/components/StorageSettings'
 import { HelpTooltip } from '@/components/ui/help-tooltip'
-import { LockNotice } from '@/components/ui/lock-notice'
-import { useEvaluation } from '@/state/EvaluationContext'
 import { cn } from '@/lib/utils'
 
 interface SettingsModalProps {
@@ -51,12 +48,6 @@ const SCHEMA_HELP = (
 
 const TABS: Tab[] = [
   {
-    id: 'provider',
-    label: 'Provider',
-    note: 'Ollama is local; Anthropic needs an API key and a chosen model.',
-    render: () => <ProviderConfig />
-  },
-  {
     id: 'schema',
     label: 'Schema',
     note: 'The typed output properties each ticket is scored on.',
@@ -71,8 +62,8 @@ const TABS: Tab[] = [
   },
   {
     id: 'storage',
-    label: 'Storage',
-    note: 'Where eval files are saved and auto-loaded.',
+    label: 'Evaluator',
+    note: 'Who you are, and which file your scores are being written to.',
     render: () => <StorageSettings />
   }
 ]
@@ -81,9 +72,6 @@ const TABS: Tab[] = [
 export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
   const [activeId, setActiveId] = useState(TABS[0].id)
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
-  const { phase } = useEvaluation()
-  // The working file (incl. its config) is read-only while a run is in flight — sequential only.
-  const busy = phase === 'running'
 
   // Start on the first tab each time the modal opens.
   useEffect(() => {
@@ -156,14 +144,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
               {active.help ? <HelpTooltip label={`About ${active.label}`}>{active.help}</HelpTooltip> : null}
             </div>
           ) : null}
-          {busy ? (
-            <div className="mb-4">
-              <LockNotice>Settings are read-only while an evaluation is running — wait for it to finish.</LockNotice>
-            </div>
-          ) : null}
-          <fieldset disabled={busy} className={cn('m-0 border-0 p-0', busy && 'opacity-60')}>
-            {active.render()}
-          </fieldset>
+          {active.render()}
         </DialogBody>
       </DialogContent>
     </Dialog>

@@ -6,12 +6,12 @@ import { SectionHeader } from '@/components/ui/section-header'
 import { useSettings } from '@/state/SettingsContext'
 import { useSession } from '@/state/SessionContext'
 import { LockNotice } from '@/components/ui/lock-notice'
-import { compilePrompt, SAMPLE_PREVIEW_TICKETS } from '@shared/promptCompiler'
-import { configLocked } from '@shared/evalFile'
+import { compilePrompt, SAMPLE_PREVIEW_TICKETS } from '@lib/promptCompiler.mjs'
+import { configLocked } from '@lib/evalFile.mjs'
 import { cn } from '@/lib/utils'
 
 /**
- * Free-form rules editor (spec §2.3/§4) plus a compiled-prompt preview. The preview runs the
+ * Free-form rules editor plus a compiled-prompt preview. The preview runs the
  * pure prompt compiler over a sample ticket so the user sees exactly what the LLM will receive
  * (rules + schema spec + output contract + a rendered ticket).
  */
@@ -35,9 +35,10 @@ export function RulesEditor() {
     <div className="space-y-3">
       {locked ? (
         <LockNotice>
-          Rules are locked — this file already has evaluations, so its scoring guidance is frozen.{' '}
-          <span className="font-bold text-ink">Open</span> its tickets.json to start a fresh evaluation with
-          different rules. (You can still preview.)
+          Rules are locked — this file already has evaluations, so its scoring guidance is frozen. Scoring the
+          same tickets under different rules means a new eval file: run{' '}
+          <span className="font-mono">/qval:evaluate-tickets</span> with{' '}
+          <span className="font-mono">--eval-file &lt;new path&gt;</span>. (You can still preview.)
         </LockNotice>
       ) : null}
       <Textarea

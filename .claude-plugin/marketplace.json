@@ -1,0 +1,19 @@
+{
+  "name": "qval",
+  "owner": {
+    "name": "Brian Levine",
+    "email": "brian@balevine.com",
+    "url": "https://github.com/balevine"
+  },
+  "plugins": [
+    {
+      "name": "qval",
+      "source": "./plugin",
+      "description": "Evaluate customer support tickets with Claude, then score them yourself and compare.",
+      "homepage": "https://github.com/balevine/qval",
+      "repository": "https://github.com/balevine/qval",
+      "license": "MIT",
+      "keywords": ["evaluation", "tickets", "support", "llm-judge"]
+    }
+  ]
+}

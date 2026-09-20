@@ -1,0 +1,47 @@
+/**
+ * The two typefaces the design depends on, self-hosted.
+ *
+ * `tailwind.config.cjs` has named Inter and IBM Plex Mono since the first commit, but nothing ever
+ * bundled them — they were resolving off our own machines. In a stranger's browser they aren't
+ * installed and the whole app quietly falls back to system-ui and Menlo. So we declare them here
+ * against the woff2 files in `@fontsource/*`, and the single-file build inlines them as data URIs.
+ *
+ * We write the `@font-face` blocks by hand rather than importing `@fontsource/inter/latin-400.css`
+ * because those stylesheets list a woff fallback alongside the woff2. No browser that can run this
+ * app would ever fetch it, and inlining it would double the font weight of the bundle.
+ *
+ * Latin only, 400 and 700 only. That is every weight the UI actually uses (`font-bold` and the
+ * default); anything else is the browser synthesizing, which it would have done before this file too.
+ */
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('@fontsource/inter/files/inter-latin-400-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('@fontsource/inter/files/inter-latin-700-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-400-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-700-normal.woff2') format('woff2');
+}

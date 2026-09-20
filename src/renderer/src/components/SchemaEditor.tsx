@@ -15,8 +15,8 @@ import {
 import { useSettings } from '@/state/SettingsContext'
 import { useSession } from '@/state/SessionContext'
 import { LockNotice } from '@/components/ui/lock-notice'
-import { allowsMultiple, blankProperty, propertyErrors, toCamelKey } from '@shared/schema'
-import { configLocked } from '@shared/evalFile'
+import { allowsMultiple, blankProperty, propertyErrors, toCamelKey } from '@lib/schema.mjs'
+import { configLocked } from '@lib/evalFile.mjs'
 import { cn } from '@/lib/utils'
 import type { EvalProperty, PropertyType } from '@shared/types'
 
@@ -39,7 +39,7 @@ function cloneProp(p: EvalProperty): EvalProperty {
 }
 
 /**
- * The ordered, editable list of typed output properties (spec §4). Local draft state is
+ * The ordered, editable list of typed output properties. Local draft state is
  * authoritative while the tab is open; each change persists the schema to settings (main
  * normalizes it). Inline validation is advisory — invalid rows simply aren't persisted.
  */
@@ -128,8 +128,9 @@ export function SchemaEditor() {
       {locked ? (
         <LockNotice>
           Schema is locked — this file already has evaluations, so its scoring criteria are frozen to keep every
-          score comparable. <span className="font-bold text-ink">Open</span> its tickets.json to start a fresh
-          evaluation with a different schema.
+          score comparable. Scoring the same tickets under a different schema means a new eval file: run{' '}
+          <span className="font-mono">/qval:evaluate-tickets</span> with{' '}
+          <span className="font-mono">--eval-file &lt;new path&gt;</span>.
         </LockNotice>
       ) : null}
       <fieldset disabled={locked} className={cn('m-0 space-y-3 border-0 p-0', locked && 'opacity-60')}>

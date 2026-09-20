@@ -1,0 +1,24 @@
+# Typecheck, tests, and the one check that can't be done by reading the diff: that the committed
+# single-file UI bundle is what the current sources actually build.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      # Rebuilds into a temp directory and diffs against plugin/ui/index.html.
+      - run: npm run check:ui

@@ -12,12 +12,13 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select'
-import { aggregateSession, buildStreams, streamLabel } from '@shared/aggregate'
-import { evaluatedCount } from '@shared/evalFile'
+import { aggregateSession, buildStreams, streamLabel } from '@lib/aggregate.mjs'
+import { evaluatedCount } from '@lib/evalFile.mjs'
 import { TICKET_STATUSES, type AggregateResult, type EvalFile, type Ticket } from '@shared/types'
 import { formatComparisonCell, formatRollup, formatStreamCell } from '@/lib/aggregateFormat'
 import { errorMessage, formatInt } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { api } from '@/lib/apiClient'
 
 const PAGE_SIZE = 100
 type Mode = 'compare' | 'llm' | 'human'
@@ -134,13 +135,14 @@ function Summary({
   const merged = comparisons.length > 0
 
   const removeComparison = async (id: string) => {
-    const next = await window.api.session.removeComparison(id)
+    const next = await api.session.unmergeComparison(id)
     if (next) setSession(next)
   }
   const exportReport = async () => {
     try {
-      const path = await window.api.session.exportReport()
-      if (path) toast('Exported merged report')
+      // The destination is derived from the working file, not chosen — so say where it went.
+      const path = await api.session.exportReport()
+      if (path) toast(`Exported ${path}`)
     } catch (e) {
       toast(errorMessage(e, 'Could not export report'), 'error')
     }
@@ -198,7 +200,7 @@ function Summary({
       ) : null}
 
       <div className="mt-3 font-mono text-[10px] uppercase tracking-widest text-ink/40">
-        Working file: {workingPath ?? 'unsaved (use Export to save)'}
+        Working file: {workingPath ?? 'unsaved'}
       </div>
     </div>
   )
