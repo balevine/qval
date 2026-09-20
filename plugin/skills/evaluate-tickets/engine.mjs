@@ -39,7 +39,6 @@
 // file), 3 scaffolded (stop and let the user edit).
 
 import {
-  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -52,8 +51,8 @@ import { fileURLToPath } from 'node:url'
 
 import { flagValue, parseArgs } from '../../lib/args.mjs'
 import { atomicWriteJson, readJson } from '../../lib/fsUtil.mjs'
-import { normalizeSchema, propertyErrors } from '../../lib/schema.mjs'
-import { normalizeRules } from '../../lib/rules.mjs'
+import { DEFAULT_SCHEMA, normalizeSchema, propertyErrors } from '../../lib/schema.mjs'
+import { DEFAULT_RULES, normalizeRules } from '../../lib/rules.mjs'
 import { configFingerprint, datasetFingerprint } from '../../lib/fingerprint.mjs'
 import { defaultEvalPath, RUN_DIR, samePath } from '../../lib/paths.mjs'
 import { compilePrompt, SYSTEM_PROMPT } from '../../lib/promptCompiler.mjs'
@@ -88,7 +87,6 @@ const PROVIDER = 'claude-code'
 // The manifest ships inside the plugin, so this works from a copied skill folder too, which is what
 // the old hard-coded constant was working around.
 
-const templatePath = (name) => fileURLToPath(new URL(`./templates/${name}`, import.meta.url))
 const enginePath = fileURLToPath(import.meta.url)
 
 const nowIso = () => new Date().toISOString()
@@ -222,6 +220,19 @@ function checkRows(raw, schemaPath) {
 
 // ── init ──────────────────────────────────────────────────────────────────────
 
+/**
+ * The starter config, written from the same constants a browser-seeded session starts from.
+ * They are one definition on purpose. Both copies are hashed into the config fingerprint, so two
+ * users who each accepted the defaults would get files that refuse to merge if these ever drifted.
+ * @param {string} name
+ * @returns {string}
+ */
+function starterConfig(name) {
+  return name === DEFAULT_SCHEMA_FILE
+    ? `${JSON.stringify(DEFAULT_SCHEMA, null, 2)}\n`
+    : `${DEFAULT_RULES}\n`
+}
+
 function cmdInit() {
   let created = 0
   for (const name of [DEFAULT_RULES_FILE, DEFAULT_SCHEMA_FILE]) {
@@ -230,7 +241,7 @@ function cmdInit() {
       console.log(`EXISTS ${dest}`)
       continue
     }
-    copyFileSync(templatePath(name), dest)
+    writeFileSync(dest, starterConfig(name))
     console.log(`CREATED ${dest}`)
     created++
   }

@@ -1,6 +1,3 @@
-// The default rules text also seeds templates/EVAL_RULES.md. Keep the two in sync, since the rules
-// feed the config fingerprint and any drift changes it.
-
 /** Minimal starter rules: the free-form context the LLM (and the human) reads before scoring. */
 export const DEFAULT_RULES = `Evaluate each support ticket against the output schema below.
 

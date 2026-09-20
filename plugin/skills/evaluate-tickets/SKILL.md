@@ -32,7 +32,7 @@ The run needs `EVAL_RULES.md` (free-text scoring guidance) and `EVAL_SCHEMA.json
 node "$ENGINE" init
 ```
 
-- **Exit 3**: it created one or both from the starter templates. **Stop here.** Go to Step 3 and work with the user on the contents. Do not plan a run against a placeholder config.
+- **Exit 3**: it created one or both from the starter config. **Stop here.** Go to Step 3 and work with the user on the contents. Do not plan a run against a placeholder config.
 - **Exit 0** (`READY`): both files already exist. Go to Step 3 if the user wants to change what is measured; otherwise skip to Step 4.
 
 ## Step 3. Draft the rules and schema with the user

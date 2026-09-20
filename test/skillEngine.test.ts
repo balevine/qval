@@ -21,7 +21,8 @@ import { join, relative, resolve } from 'node:path'
 
 import { applyHumanValues, normalizeEvalFile } from '@lib/evalFile.mjs'
 import { configFingerprint, datasetFingerprint } from '@lib/fingerprint.mjs'
-import { normalizeSchema } from '@lib/schema.mjs'
+import { DEFAULT_SCHEMA, normalizeSchema } from '@lib/schema.mjs'
+import { DEFAULT_RULES } from '@lib/rules.mjs'
 import { SYSTEM_PROMPT } from '@lib/promptCompiler.mjs'
 import { parseTicketsFile } from '@lib/tickets.mjs'
 import type { EvalFile, EvalResult, Ticket } from '@shared/types'
@@ -222,8 +223,8 @@ function snapshot(dir: string): string[] {
 }
 
 // --- init + config -----------------------------------------------------------
-// Only the exit codes are tested here: these two commands are control flow for `SKILL.md`, and the
-// config they produce is already pinned to the app's by `test/skillParity.test.ts`.
+// Mostly exit codes: these two commands are control flow for `SKILL.md`. The exception is what
+// `init` writes, which has to be the same starter config a browser-seeded session gets.
 
 describe('init + config', () => {
   it('scaffolds the config files and exits 3 so the skill stops for the user to edit', () => {
@@ -240,6 +241,24 @@ describe('init + config', () => {
     expect(second.code).toBe(0)
     expect(second.outToken).toBe('EXISTS')
     expect(second.out).toContain('READY')
+  })
+
+  it('scaffolds the same starter config a review session seeds itself from', () => {
+    // `init` and the review server are two entry points onto one question (what does a new
+    // evaluation start from), and both hash their answer into the config fingerprint. If they ever
+    // disagree, two users who each accepted the defaults get files that refuse to merge, and the
+    // refusal says their criteria differ, which is true and unhelpful. The fingerprint is the
+    // assertion that matters. The two above it are there to say which half moved.
+    const dir = makeDir({ config: false })
+    expect(engine(dir, ['init']).code).toBe(3)
+
+    const rules = readFileSync(join(dir, 'EVAL_RULES.md'), 'utf8')
+    const schema = JSON.parse(readFileSync(join(dir, 'EVAL_SCHEMA.json'), 'utf8'))
+    expect(rules.trim()).toBe(DEFAULT_RULES.trim())
+    expect(schema).toEqual(DEFAULT_SCHEMA)
+    expect(configFingerprint(normalizeSchema(schema), rules)).toBe(
+      configFingerprint(normalizeSchema(DEFAULT_SCHEMA), DEFAULT_RULES)
+    )
   })
 
   it('refuses a schema the model could not satisfy (exit 2, nothing planned)', () => {
