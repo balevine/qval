@@ -140,7 +140,7 @@ function Summary({
   }
   const exportReport = async () => {
     try {
-      // The destination is derived from the working file, not chosen — so say where it went.
+      // The destination is derived from the working file, not chosen. So say where it went.
       const path = await api.session.exportReport()
       if (path) toast(`Exported ${path}`)
     } catch (e) {

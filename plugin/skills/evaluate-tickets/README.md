@@ -33,7 +33,7 @@ Everything else happens in the review UI, which is the sibling skill **[`/qval:r
 
 ## Usage
 
-1. `cd` into the directory holding your ticket file (the skill reads and writes there). The filename doesn't matter — candidates are found by opening the `.json` files and checking the shape. A `qbort-output/` subdirectory is searched too, if you have one. If there's more than one dataset, you'll be asked which you meant; if there's none, you'll be asked for the path.
+1. `cd` into the directory holding your ticket file (the skill reads and writes there). The filename doesn't matter. Candidates are found by opening the `.json` files and checking the shape. A `qbort-output/` subdirectory is searched too, if you have one. If there's more than one dataset, you'll be asked which you meant; if there's none, you'll be asked for the path.
 2. Invoke the skill by typing **`/qval:evaluate-tickets`**. It is deliberately not model-invocable: it stays out of the context window until you ask for it, which means asking in prose ("evaluate these tickets") will not trigger it.
 3. If **`EVAL_RULES.md`** and **`EVAL_SCHEMA.json`** don't exist, the skill scaffolds them with the starter schema and rules and stops so you can say what you actually want measured. Describe it in prose and Claude drafts both files; `engine.mjs config --check` validates the schema and prints it back as a table before anything runs. `/qval:review` reads and writes the same two files, so a schema built in the browser is one this skill can run against.
 4. Confirm the **model** to record. It's stamped permanently into the eval file, so there's no default and no placeholder; the skill asks if it can't resolve one.
@@ -42,7 +42,7 @@ Everything else happens in the review UI, which is the sibling skill **[`/qval:r
 
 Both directories are generated, so gitignore `qval-output/` and `.qval-run/` alike. `.qval-run/` is scratch (run state, per-batch compiled prompts, raw subagent output) and is safe to delete between runs; the eval file is deliberately kept out of it, in `qval-output/`, because that one is not. Neither location is configurable.
 
-Planning a run clears the previous run's prompts, batch files, and round manifests, so a run is never assembled from output an earlier one left behind. It leaves the review half's session record and settings alone — those live in the same directory and outlast any single run.
+Planning a run clears the previous run's prompts, batch files, and round manifests, so a run is never assembled from output an earlier one left behind. It leaves the review half's session record and settings alone. Those live in the same directory and outlast any single run.
 
 ## What you get
 
@@ -90,5 +90,5 @@ engine.mjs                  CLI: init | config | plan | assemble | retry | statu
 - **One model scores every ticket in a file.** `plan` refuses to top up a file whose `llm` evaluator already records a different model, because a second model's values inside one evaluator would make its recorded model a lie. Start a new eval file instead.
 - **Changing the rules or schema needs a new eval file.** Both are hashed into the config fingerprint, so an edit makes the existing file incompatible on purpose. `plan` refuses with `CONFIG_MISMATCH` rather than mixing criteria in one file.
 - **Batch size is a tradeoff.** Bigger batches (`--batch-size`, default 10) mean fewer subagents and less overhead, but a truncated or garbled response loses more tickets at once. They're recoverable either way, since the retry round picks them up.
-- **Don't run it while a review session has the same eval file open.** It refuses (`SESSION_LIVE`) rather than race the review server for the file — a refused run, not lost work. Click **Finish** in the review tab first.
+- **Don't run it while a review session has the same eval file open.** It refuses (`SESSION_LIVE`) rather than race the review server for the file, which means a refused run, not lost work. Click **Finish** in the review tab first.
 - **One retry round, not a loop.** A ticket that's genuinely unscoreable stays in the file as an error rather than burning subagents forever. Re-plan with `--mode remaining` if you want another go.

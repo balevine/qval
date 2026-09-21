@@ -226,7 +226,7 @@ describe('applyHumanValues', () => {
 })
 
 describe('evaluatedCount', () => {
-  it('counts only results with ≥1 non-empty value — ignores errored and all-dropped (same for both streams)', () => {
+  it('counts only results with ≥1 non-empty value, ignoring errored and all-dropped (same for both streams)', () => {
     const f = applyLlmResults(working(), {
       provider: 'ollama',
       model: 'm',
@@ -242,7 +242,7 @@ describe('evaluatedCount', () => {
 })
 
 describe('needsAttention', () => {
-  it('flags a missing, errored, or dropped-value result — and only those', () => {
+  it('flags a missing, errored, or dropped-value result, and only those', () => {
     expect(needsAttention(undefined)).toBe(true) // never scored
     expect(needsAttention({ ticketId: 1, values: {}, evaluatedAt: 't', error: 'boom' })).toBe(true)
     expect(

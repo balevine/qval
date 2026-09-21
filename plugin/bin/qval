@@ -143,7 +143,7 @@ const forDisplay = (dir, paths) => paths.map((p) => `  ${relative(dir, p) || bas
 
 /**
  * Work out what to open, from an explicit argument or by looking around the directory. Returns
- * `{ evalPath, ticketsPaths }` — `evalPath` may not exist yet, in which case the child creates it.
+ * `{ evalPath, ticketsPaths }`. `evalPath` may not exist yet, in which case the child creates it.
  *
  * This runs in the parent on purpose: an ambiguous directory is the most likely failure, and it
  * should come back as an exit code with a list, not as a line in a detached process's log.
@@ -184,7 +184,7 @@ async function resolveTarget(target, dir) {
       // Look for the dataset in the working directory *and* beside the eval file. An eval file now
       // lives in `qval-output/`, which holds no tickets, and one passed in from someone else's
       // directory may have its dataset there instead. The fingerprint picks which is right, so
-      // offering both can't mislink — offering neither is what would fail.
+      // offering both can't mislink. Offering neither is what would fail.
       const beside = dirname(path) === dir ? [] : await ticketsFilesIn(dirname(path))
       return { evalPath, ticketsPaths: [...new Set([...(await ticketsFilesIn(dir)), ...beside])] }
     }
@@ -227,7 +227,7 @@ async function resolveTarget(target, dir) {
 /**
  * The paths on offer to MERGE: every other `*.qval.json` next to the working file, plus anything
  * named with `--compare`. Order is what the ids are assigned from, so it has to survive the trip
- * to the child — hence paths here and `comparisonSources` there, rather than ids in two places.
+ * to the child. Hence paths here and `comparisonSources` there, rather than ids in two places.
  */
 function resolveCandidatePaths(args, dir, evalPath) {
   const explicit = (flagValue(args, 'compare') ?? '')
@@ -284,7 +284,7 @@ async function currentConfigFingerprint(settings) {
  *
  * **Only when they changed it.** These are files in the user's working directory that they may well
  * have written by hand, and a session opened on an older eval file loads *that file's* config into
- * settings — so writing unconditionally would stamp an archived schema over the current one just for
+ * settings. Writing unconditionally would stamp an archived schema over the current one just for
  * looking at an old result. Comparing fingerprints keeps the write to the case it exists for.
  */
 async function writeConfigForEngine(settings, dir, seededFingerprint) {

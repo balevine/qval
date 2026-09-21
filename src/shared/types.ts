@@ -83,7 +83,7 @@ export interface EvalIssue {
   original?: unknown
 }
 
-/** One evaluator's scores for one ticket. `results` is sparse — only scored tickets appear. */
+/** One evaluator's scores for one ticket. `results` is sparse, so only scored tickets appear. */
 export interface EvalResult {
   ticketId: number
   values: EvalValues
@@ -97,7 +97,7 @@ export interface EvalResult {
 export interface Evaluator {
   /** Stable id, unique within the file. */
   id: string
-  /** Drives stream separation & aggregation — never inferred from `name`. */
+  /** Drives stream separation & aggregation. Never inferred from `name`. */
   kind: EvaluatorKind
   /** Display label (the human name comes from the run config). */
   name: string
@@ -108,7 +108,7 @@ export interface Evaluator {
   results: EvalResult[]
 }
 
-/** The dataset an eval file references (by fingerprint — tickets are not embedded). */
+/** The dataset an eval file references (by fingerprint, since tickets are not embedded). */
 export interface DatasetRef {
   fingerprint: string
   ticketCount: number

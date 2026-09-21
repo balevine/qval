@@ -3,8 +3,8 @@
  *
  * It lives in `test/` rather than beside the module because it crosses the repo/plugin boundary,
  * the same reason `skillEngine.test.ts` does. Every test drives a real listening server over real
- * HTTP on an OS-assigned loopback port, because the things worth checking here — the `Host`
- * allowlist, the token, `Sec-Fetch-Site` — are all properties of actual requests.
+ * HTTP on an OS-assigned loopback port, because the things worth checking here (the `Host`
+ * allowlist, the token, `Sec-Fetch-Site`) are all properties of actual requests.
  */
 
 import { createHash } from 'node:crypto'
@@ -234,7 +234,7 @@ describe('POST /api/result', () => {
     const human = onDisk.evaluators.find((e) => e.kind === 'human')!
     expect(human.name).toBe('Ada')
     expect(human.results[0].ticketId).toBe(1)
-    // Clamped to the range, and the off-schema key is gone. Human results carry no `issues[]` —
+    // Clamped to the range, and the off-schema key is gone. Human results carry no `issues[]`.
     // that repair trail belongs to the LLM, and this matches what the app's IPC path persists.
     expect(human.results[0].values).toEqual({ empathy: 5 })
   })
@@ -355,7 +355,7 @@ describe('POST /api/comparison', () => {
     return path
   }
 
-  it('merges a candidate by id — the path never leaves the host', async () => {
+  it('merges a candidate by id, and the path never leaves the host', async () => {
     const { call, workspace, home } = await start()
     workspace.setComparisonSources([{ id: 'c1', name: 'alice.qval.json', path: await sibling(home, workspace) }])
 

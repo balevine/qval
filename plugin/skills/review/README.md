@@ -16,7 +16,7 @@ The LLM half is the sibling skill [`evaluate-tickets`](../evaluate-tickets/READM
 2. Type **`/qval:review`**. It is deliberately not model-invocable, so asking in prose will not trigger it.
 3. Claude starts the server and gives you a URL. A browser usually opens by itself; when it can't, the URL is printed for you to open.
 4. Score tickets, merge files, and click **Finish** when you're done.
-5. Ask Claude how it went — it runs `qval status` and reports the counts back.
+5. Ask Claude how it went. It runs `qval status` and reports the counts back.
 
 The session is **detached**: the command that starts it returns immediately, and the server keeps running while you work. Scoring a few hundred tickets takes an hour, and no Bash timeout survives that.
 
@@ -30,11 +30,11 @@ Everything is written to the eval file as you make it, so there is no Save. Ther
 
 `serve` offers every other `*.qval.json` next to your working file, plus anything you pass to `--compare`. Merging pools that file's evaluators into the comparison; it never modifies either file.
 
-Two files merge only when **both** fingerprints match: the same tickets *and* the same schema *and* the same rules. Anything else is refused with the reason, which is the point — pooling scores given under different criteria would quietly produce a meaningless average.
+Two files merge only when **both** fingerprints match: the same tickets *and* the same schema *and* the same rules. Anything else is refused with the reason, which is the point. Pooling scores given under different criteria would quietly produce a meaningless average.
 
 ## Shared config
 
-`serve` seeds a new session's schema and rules from `EVAL_SCHEMA.json` and `EVAL_RULES.md` when they're there, and writes back whatever you ended up using when the session ends — but only if you changed it. So the two skills always score against the same config, whichever one you set it up in, and opening an old eval file just to read it never rewrites the config in your working directory.
+`serve` seeds a new session's schema and rules from `EVAL_SCHEMA.json` and `EVAL_RULES.md` when they're there, and writes back whatever you ended up using when the session ends, but only if you changed it. So the two skills always score against the same config, whichever one you set it up in, and opening an old eval file just to read it never rewrites the config in your working directory.
 
 ## Files
 
@@ -46,4 +46,4 @@ SKILL.md          instructions Claude follows (not human docs)
 ../../lib/        the logic, shared with the engine and the UI
 ```
 
-Gitignore both. `.qval-run/` is scratch (the session record and your settings) and is safe to delete between runs. `qval-output/` holds your eval files and exported reports — it's where `serve` looks for what to open and what to offer for merging, and it's the one thing here you can't regenerate, so ignore it in git but don't clear it.
+Gitignore both. `.qval-run/` is scratch (the session record and your settings) and is safe to delete between runs. `qval-output/` holds your eval files and exported reports. It's where `serve` looks for what to open and what to offer for merging, and it's the one thing here you can't regenerate, so ignore it in git but don't clear it.

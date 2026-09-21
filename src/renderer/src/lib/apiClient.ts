@@ -11,7 +11,7 @@
  * working file rather than chosen.
  *
  * **No LLM run.** That moved to `/qval:evaluate-tickets`, and the provider, secret, and
- * evaluation members are gone from the contract entirely — there is nothing left to stub.
+ * evaluation members are gone from the contract entirely. There is nothing left to stub.
  */
 
 import type { IpcApi, SessionSnapshot, Settings } from '@shared/types'
@@ -64,7 +64,7 @@ let lease: EventSource | null = null
 /**
  * Hold the review session open. The server treats an `/api/events` stream as the lease on this tab:
  * while it is connected the session is live, and once it has been gone for the grace period the run
- * is recorded as abandoned. Nothing is read off the stream — having it open is the whole contract,
+ * is recorded as abandoned. Nothing is read off the stream. Having it open is the whole contract,
  * and `EventSource` reconnects on its own. The token rides in the query string because `EventSource`
  * cannot set a header.
  *

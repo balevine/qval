@@ -90,7 +90,7 @@ describe('explicit-path file operations', () => {
     await ws.open(ticketsPath)
     const out = join(home, 'run.qval.json')
 
-    expect(await ws.save()).toBeNull() // nowhere to write yet — the caller owns Save-As
+    expect(await ws.save()).toBeNull() // nowhere to write yet. The caller owns Save-As
     expect(await ws.save(out)).toBe(out)
     expect(ws.currentPath()).toBe(out)
     expect(await ws.save()).toBe(out) // now bound
@@ -117,7 +117,7 @@ describe('explicit-path file operations', () => {
     const out = join(home, 'run.qval.json')
     await ws.save(out)
 
-    // Workspaces with no memory of the dataset at all — only the locator can supply it.
+    // Workspaces with no memory of the dataset at all. Only the locator can supply it.
     let n = 0
     const fresh = () => new Workspace(new SettingsStore(join(dir, `cold-${n++}`)), '0.1.0', () => 'now')
 

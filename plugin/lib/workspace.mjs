@@ -24,7 +24,7 @@ import { atomicWriteJson, readJson } from './fsUtil.mjs'
  * already know. The caller decides how to ask (a cwd scan, under the CLI). Resolves to a path, to a
  * list of candidates to try in order, or to null when there's no answer.
  *
- * A list is safe because the fingerprint, not the caller, decides which one it is — so a host that
+ * A list is safe because the fingerprint, not the caller, decides which one it is. A host that
  * cannot narrow the directory down to one file should hand over all of them rather than give up.
  * @typedef {() => Promise<string | string[] | null>} DatasetLocator
  */
@@ -38,7 +38,7 @@ import { atomicWriteJson, readJson } from './fsUtil.mjs'
 
 /**
  * Owns the in-memory working session (dataset tickets + working eval file + its path) and all file
- * I/O for it. The renderer holds a display copy but never a filesystem path — the host tracks the
+ * I/O for it. The renderer holds a display copy but never a filesystem path. The host tracks the
  * path and does atomic writes.
  */
 export class Workspace {
@@ -162,7 +162,7 @@ export class Workspace {
   /**
    * The loaded file is the authoritative config source: reload the working schema/rules from its
    * snapshot so the editors mirror the file (and, once locked, stay pinned to it). Called on
-   * open/reload. The model that produced the file is not settings — it lives on the file's
+   * open/reload. The model that produced the file is not settings. It lives on the file's
    * own `llm` evaluator, which is what pins a top-up run (`lockedLlmProvider`).
    * @param {EvalFile} file
    * @returns {Promise<void>}

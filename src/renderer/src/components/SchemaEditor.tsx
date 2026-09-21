@@ -41,7 +41,7 @@ function cloneProp(p: EvalProperty): EvalProperty {
 /**
  * The ordered, editable list of typed output properties. Local draft state is
  * authoritative while the tab is open; each change persists the schema to settings (main
- * normalizes it). Inline validation is advisory — invalid rows simply aren't persisted.
+ * normalizes it). Inline validation is advisory. Invalid rows simply aren't persisted.
  */
 export function SchemaEditor() {
   const { settings, update } = useSettings()
@@ -127,8 +127,8 @@ export function SchemaEditor() {
     <div className="space-y-3">
       {locked ? (
         <LockNotice>
-          Schema is locked — this file already has evaluations, so its scoring criteria are frozen to keep every
-          score comparable. Scoring the same tickets under a different schema means a new eval file: run{' '}
+          Schema is locked. This file already has evaluations, so its scoring criteria are frozen to keep every
+          score comparable. Scoring the same tickets under a different schema means a new eval file. Run{' '}
           <span className="font-mono">/qval:evaluate-tickets</span> with{' '}
           <span className="font-mono">--eval-file &lt;new path&gt;</span>.
         </LockNotice>

@@ -11,8 +11,8 @@ const here = fileURLToPath(new URL('.', import.meta.url))
  * Builds the UI, and nothing else. The logic ships as the `plugin/lib/*.mjs` files themselves and
  * the server and engine run on bare node, so this is the only thing in the repo that needs a build.
  *
- * The output is one self-contained `plugin/ui/index.html` — every byte of JS, CSS, and font inlined
- * by `vite-plugin-singlefile` — because the plugin folder has to be installable with no build step.
+ * The output is one self-contained `plugin/ui/index.html`. Every byte of JS, CSS, and font is inlined
+ * by `vite-plugin-singlefile`, because the plugin folder has to be installable with no build step.
  * That file is committed; `npm run check:ui` rebuilds it and fails if the committed copy has drifted.
  */
 export default defineConfig({

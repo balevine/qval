@@ -529,7 +529,7 @@ describe('re-runs and the human evaluator', () => {
   it("never reads a previous run's batch output as this run's answer", () => {
     // Batch files are named by round and index, so a shorter run reuses a longer one's names. If
     // `plan` left them there, a subagent that wrote nothing would be indistinguishable from one
-    // that returned the previous run's values — silently, re-stamped, and counted as EVALUATED.
+    // that returned the previous run's values, silently re-stamped and counted as EVALUATED.
     const dir = makeDir()
     plan(dir, ['--batch-size', '1']) // four tickets, four batches: batch-0-0 .. batch-0-3
     respond(dir, 0, (ids) => answer(ids))

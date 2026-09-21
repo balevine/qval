@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 Scores a ticket file and writes a Qval eval file (`*.qval.json`). The **ambient Claude model** (via subagents) supplies the *judgment*. A deterministic Node engine (`engine.mjs`) owns everything structural: config validation, both fingerprints, target selection, batching, prompt compilation, per-value validation and repair, retry accounting, and the atomic eval-file writes. Never hand those structural jobs to the model.
 
-The engine lives next to this file, at `engine.mjs`. Let `ENGINE` be its absolute path, which is `${CLAUDE_PLUGIN_ROOT}/skills/evaluate-tickets/engine.mjs`. Run all `node "$ENGINE" ...` commands from the user's working directory. Scratch state goes to `.qval-run/` and the eval file to `qval-output/`, both under that directory and **neither configurable** — the review half writes its session record into the same `.qval-run/`, and the durable artifact is kept out of a directory that is safe to delete.
+The engine lives next to this file, at `engine.mjs`. Let `ENGINE` be its absolute path, which is `${CLAUDE_PLUGIN_ROOT}/skills/evaluate-tickets/engine.mjs`. Run all `node "$ENGINE" ...` commands from the user's working directory. Scratch state goes to `.qval-run/` and the eval file to `qval-output/`, both under that directory and **neither configurable**. The review half writes its session record into the same `.qval-run/`, and the durable artifact is kept out of a directory that is safe to delete.
 
 **How to read the engine.** Each command's first stdout/stderr token plus its exit code is the contract. Branch on those, not on the prose around them. Exit codes: **0** ok, **1** a bad or missing flag (fix the command), **2** unusable state (fix the files or ask the user; never retry the same command verbatim), **3** `init` scaffolded config files (stop and let the user edit them).
 
@@ -18,9 +18,9 @@ Find the dataset to evaluate: a path the user gave, else `ls *.json qbort-output
 
 A ticket file is either `{ meta, tickets: [...] }` or a bare array of tickets, where a ticket is `{ id, subject, status, messages: [{ from: { name, email }, body, isStaff, createdAt }] }`. Only an integer `id` is required; `subject`, `status`, and `messages` are filled in when absent, unknown fields are ignored, and `meta` is optional (it is dropped before fingerprinting).
 
-**The filename means nothing** — identify a candidate by opening it and checking the shape, not by its name. Plenty of users hand-export their own ticket set from a real helpdesk, so expect names like `zendesk-q3.json` or `support-export.json` as readily as `tickets.json`. `qbort-output/` is worth a look because [Qbort](https://github.com/balevine/qbort) writes one timestamped run per file there, but most datasets are simply sitting in the working directory.
+**The filename means nothing.** Identify a candidate by opening it and checking the shape, not by its name. Plenty of users hand-export their own ticket set from a real helpdesk, so expect names like `zendesk-q3.json` or `support-export.json` as readily as `tickets.json`. `qbort-output/` is worth a look because [Qbort](https://github.com/balevine/qbort) writes one timestamped run per file there, but most datasets are simply sitting in the working directory.
 
-If more than one candidate exists and the user didn't name one, **ask with `AskUserQuestion`** — for Qbort output the newest is a reasonable thing to offer first, but not a safe thing to assume. Evaluating the wrong dataset produces a file that will never merge with anyone else's.
+If more than one candidate exists and the user didn't name one, **ask with `AskUserQuestion`**. For Qbort output the newest is a reasonable thing to offer first, but not a safe thing to assume. Evaluating the wrong dataset produces a file that will never merge with anyone else's.
 
 If you find **nothing**, say so and ask the user for a path rather than guessing. A dataset elsewhere on disk is fine: `plan --tickets` takes any path.
 
@@ -134,7 +134,7 @@ It prints `ASSEMBLED`, then `EVALUATED`, `DROPPED`, `FAILED`, **`NEEDS_RETRY`**,
 Failures here:
 
 - `SESSION_LIVE` (exit 2) means a review session opened on this file while the subagents were out. Ask the user to click FINISH in that tab, then **run the same `assemble --round <n>` again**. The subagents' answers are still on disk and nothing needs re-planning. Re-run `plan` only if that second attempt also refuses, since `plan` deletes those batch files and throws the round away.
-- `FILE_REPLACED` (exit 2) means the eval file is no longer the same evaluation: different tickets, or scoring criteria that changed since `plan`. Re-planning is the only answer here, because these answers were written against the old schema and rules. An ordinary human edit does not cause this — `assemble` merges onto the newer file and leaves the human evaluation alone.
+- `FILE_REPLACED` (exit 2) means the eval file is no longer the same evaluation: different tickets, or scoring criteria that changed since `plan`. Re-planning is the only answer here, because these answers were written against the old schema and rules. An ordinary human edit does not cause this. `assemble` merges onto the newer file and leaves the human evaluation alone.
 - `NOT_ASSEMBLED` means round 0 hasn't been assembled yet. `RETRY_CAPPED` means you passed a round other than 1.
 
 ## Step 8. Report and hand off
@@ -155,6 +155,6 @@ Do not print the whole eval file. Offer to summarize a few tickets if they want 
 - **Don't run while a review session has the same eval file open.** `plan` and `assemble` refuse with `SESSION_LIVE` rather than race the server for the file, and the refusal names the session's URL. This is a refusal, not lost work: ask the user to click FINISH and run again.
 - **No token or cost accounting exists for ambient runs.** Don't estimate or report either. There is no metered API call here to price.
 - **Batch size is a tradeoff**, not a tuning knob to fiddle with. Bigger batches mean fewer subagents and less overhead, but a truncated or garbled response loses more tickets at once. 10 is the default for that reason.
-- **`plan` deletes the previous run's working files.** The prompts, the batch files, and the round lists from an earlier run are removed once this run is going ahead, so a batch file is either this run's or not there at all. Never write a batch file yourself to patch up a run — re-run `plan` instead. The files `/qval:review` keeps in the same directory are left alone.
+- **`plan` deletes the previous run's working files.** The prompts, the batch files, and the round lists from an earlier run are removed once this run is going ahead, so a batch file is either this run's or not there at all. Never write a batch file yourself to patch up a run. Re-run `plan` instead. The files `/qval:review` keeps in the same directory are left alone.
 - **Suggest gitignoring both `qval-output/` and `.qval-run/`** if the working directory is a repo. Both are generated. They differ in what may be *deleted*, not in what may be committed: `.qval-run/` is disposable between runs, while `qval-output/` holds the eval file and any human evaluation in it, so never suggest clearing that one.
 - Requires Node (`node --version`). No npm install; the engine is dependency-free ESM.

@@ -190,7 +190,7 @@ describe('serve: what it opens', () => {
   it('resumes an eval file left loose in the working directory by an older version', async () => {
     // Every version before qval-output/ existed wrote the eval file here. Starting a second, empty
     // evaluation beside a full one would look like losing every score, so the old location still
-    // counts — both for what `serve` opens and for what it offers to merge.
+    // counts, both for what `serve` opens and for what it offers to merge.
     const source = await home('legacy-source')
     qval(source, ['serve', '--no-open'])
     await post((await readRecord(source))!.url!, '/api/done')
@@ -248,7 +248,7 @@ describe('serve: what it opens', () => {
     // The way out has to be in the message: the dataset may simply live somewhere else.
     expect(res.err).toContain('qval serve <path>')
 
-    // And that is genuinely a way out — a path outside the working directory is accepted.
+    // And that is genuinely a way out. A path outside the working directory is accepted.
     const elsewhere = await home('elsewhere-data')
     const res2 = qval(cwd, ['serve', join(elsewhere, 'tickets.json'), '--no-open'])
     expect(res2.out.split('\n')[0]).toBe('SERVING')
@@ -470,7 +470,7 @@ describe('shared config with the engine', () => {
 
   it('leaves the config files alone when the session did not change them', async () => {
     // They are the user's files, often hand-written. A session that only reads must not rewrite
-    // them — not even into an equivalent-but-reformatted shape.
+    // them, not even into an equivalent-but-reformatted shape.
     const schema = [{ key: 'tone', label: 'Tone', type: 'enum', options: ['warm', 'curt'] }]
     const cwd = await home('config-untouched', { 'EVAL_SCHEMA.json': schema, 'EVAL_RULES.md': 'Judge the tone.\n' })
     const before = {
@@ -479,7 +479,7 @@ describe('shared config with the engine', () => {
     }
 
     const url = field(qval(cwd, ['serve', '--no-open']).out, 'URL')!
-    // A human score, so the session did real work — just not to the config.
+    // A human score, so the session did real work, just not to the config.
     await post(url, '/api/result', { ticketId: 1, values: { tone: 'warm' } })
     await post(url, '/api/done')
     for (let i = 0; i < 50 && (await readRecord(cwd))?.status === 'live'; i++) {

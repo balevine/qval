@@ -1,6 +1,6 @@
 ---
 name: review
-description: Open the Qval review UI in a browser — set up the schema and rules, score tickets by hand, and compare your scores with the model's.
+description: Open the Qval review UI in a browser to set up the schema and rules, score tickets by hand, and compare your scores with the model's.
 disable-model-invocation: true
 ---
 
@@ -12,7 +12,7 @@ The LLM half is a different skill (`/qval:evaluate-tickets`). This one runs no m
 
 The CLI lives at `${CLAUDE_PLUGIN_ROOT}/bin/qval`. Let `QVAL` be that absolute path. Run every command from the user's working directory.
 
-**The session outlives the command.** `qval serve` starts the server detached and returns immediately, because scoring a few hundred tickets by hand takes an hour and no Bash timeout survives that. Never wait on it, never poll it in a loop, and never start a second one — `qval status` is how the answer comes back, whenever the user says they are done.
+**The session outlives the command.** `qval serve` starts the server detached and returns immediately, because scoring a few hundred tickets by hand takes an hour and no Bash timeout survives that. Never wait on it, never poll it in a loop, and never start a second one. `qval status` is how the answer comes back, whenever the user says they are done.
 
 ## Step 1. Start the review server
 
@@ -20,15 +20,15 @@ The CLI lives at `${CLAUDE_PLUGIN_ROOT}/bin/qval`. Let `QVAL` be that absolute p
 "$QVAL" serve
 ```
 
-With no argument it works out what to open: a single `*.qval.json` in `qval-output/` (or loose in the working directory, where older versions put it), or a single ticket file if there is no eval file yet. **Datasets are found by content, not by name** — every `.json` in the working directory is opened and kept if it parses as tickets, so a hand-exported `zendesk-q3.json` is found exactly like a `tickets.json`. The `qbort-output/` subdirectory is searched too, since that is where [Qbort](https://github.com/balevine/qbort) puts a run, but nothing requires one. Pass the file explicitly when the user named one, as `"$QVAL" serve <path>`, and note that a path outside the working directory is fine.
+With no argument it works out what to open: a single `*.qval.json` in `qval-output/` (or loose in the working directory, where older versions put it), or a single ticket file if there is no eval file yet. **Datasets are found by content, not by name.** Every `.json` in the working directory is opened and kept if it parses as tickets, so a hand-exported `zendesk-q3.json` is found exactly like a `tickets.json`. The `qbort-output/` subdirectory is searched too, since that is where [Qbort](https://github.com/balevine/qbort) puts a run, but nothing requires one. Pass the file explicitly when the user named one, as `"$QVAL" serve <path>`, and note that a path outside the working directory is fine.
 
 Several datasets in one place is ordinary (Qbort keeps every run under its own timestamped name, and people accumulate exports). Starting a **new** evaluation over several of them is refused as `AMBIGUOUS` with the list, because nothing but the user knows which one they meant. **Resuming** an existing `*.qval.json` is not, because an eval file names its dataset by fingerprint and the relink finds it on its own.
 
 Read the first token of stdout:
 
-- **`SERVING`** — followed by `URL`, `WORKING_FILE`, `DATASET`, `CANDIDATES` (how many other eval files it found to merge), and `OPENED yes|no`. Go to Step 2.
-- **`ALREADY_SERVING`** — a session is already live here, on the file that was asked for. Give the user that `URL` again. Do not start another.
-- **Exit 2**: `NO_DATASET` (nothing here to review — **ask the user where their ticket file is** and re-run with that path; don't assume they have one to generate), `AMBIGUOUS` (it lists the candidates — **ask the user which one with `AskUserQuestion`**, then re-run with that path), `ALREADY_SERVING_OTHER_FILE` (see below), `MISSING_FILE`, `BAD_TICKETS`, `SERVER_FAILED`, `SERVER_TIMEOUT`.
+- **`SERVING`**. Followed by `URL`, `WORKING_FILE`, `DATASET`, `CANDIDATES` (how many other eval files it found to merge), and `OPENED yes|no`. Go to Step 2.
+- **`ALREADY_SERVING`**. A session is already live here, on the file that was asked for. Give the user that `URL` again. Do not start another.
+- **Exit 2**: `NO_DATASET` (nothing here to review, so **ask the user where their ticket file is** and re-run with that path, and don't assume they have one to generate), `AMBIGUOUS` (it lists the candidates, so **ask the user which one with `AskUserQuestion`**, then re-run with that path), `ALREADY_SERVING_OTHER_FILE` (see below), `MISSING_FILE`, `BAD_TICKETS`, `SERVER_FAILED`, `SERVER_TIMEOUT`.
 
 Only one review session runs per directory. `ALREADY_SERVING_OTHER_FILE` means a session is open on the file named on its `OPEN` line, which is not the one asked for. Tell the user which file is open, give them its `URL`, and say they have to click **Finish** there before the other one can be opened. Do not re-run `serve` until they say they have.
 - **Exit 1**: a bad flag. Fix the command.
@@ -39,8 +39,8 @@ Optional flags: `--compare a.qval.json,b.qval.json` (offer files from elsewhere 
 
 **Always print the `URL` line to the user, whatever `OPENED` says.** It is the only way into the session, and it carries a per-session token, so a URL from a previous run will not work.
 
-- `OPENED yes` — a browser was launched. Tell them it should be open, and give the URL anyway in case it opened somewhere they cannot see.
-- `OPENED no` — nothing was launched (that is what happens when `$BROWSER` is set to a sentinel, which Claude Code's own agent view does). Tell them to open the URL themselves.
+- `OPENED yes`. A browser was launched. Tell them it should be open, and give the URL anyway in case it opened somewhere they cannot see.
+- `OPENED no`. Nothing was launched (that is what happens when `$BROWSER` is set to a sentinel, which Claude Code's own agent view does). Tell them to open the URL themselves.
 
 Then say what they can do there: edit the schema and rules under **Settings**, click a ticket to score it by hand, **Merge** other people's eval files for a side-by-side comparison, and **Finish** when they are done.
 
@@ -56,12 +56,12 @@ When they say they are finished (or ask what happened):
 "$QVAL" status
 ```
 
-- **`REVIEW live`** — still open. Print the `URL` again if they lost it.
-- **`REVIEW done`** — they clicked Finish. Report the counts on the `LLM` and `HUMAN` lines.
-- **`REVIEW abandoned`** — the tab was closed without clicking Finish, or it was never opened. The work is still saved; only the ending is unrecorded. Say so plainly rather than treating it as a failure.
-- **`CONFIG_WRITTEN`** — printed after the status line when the session changed the schema or the rules, naming the two files in the working directory it rewrote. Mention it; those are the user's files. Its absence means they were left alone.
-- **`REVIEW stale`** — the server process died without recording an outcome. The eval file is intact; offer to start a new session.
-- **`REVIEW none`** — no session has run in this directory.
+- **`REVIEW live`**. Still open. Print the `URL` again if they lost it.
+- **`REVIEW done`**. They clicked Finish. Report the counts on the `LLM` and `HUMAN` lines.
+- **`REVIEW abandoned`**. The tab was closed without clicking Finish, or it was never opened. The work is still saved; only the ending is unrecorded. Say so plainly rather than treating it as a failure.
+- **`CONFIG_WRITTEN`**. Printed after the status line when the session changed the schema or the rules, naming the two files in the working directory it rewrote. Mention it; those are the user's files. Its absence means they were left alone.
+- **`REVIEW stale`**. The server process died without recording an outcome. The eval file is intact; offer to start a new session.
+- **`REVIEW none`**. No session has run in this directory.
 
 `status` also prints `FILE`, the LLM and human scored counts, and `UPDATED`, whether or not a session ever ran. It is the cheap way to answer "how far along is this?" at any time.
 

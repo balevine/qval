@@ -20,8 +20,8 @@ export const DEFAULT_SETTINGS = {
 /**
  * Merge a raw (possibly partial or stale) settings object on top of the defaults, coercing fields.
  * Unknown shapes fall back to defaults, which keeps `settings.json` forward and backward compatible
- * as the model evolves — including a file written by a release that still had provider settings, or a
- * save folder to point a file dialog at.
+ * as the model evolves. That includes a file written by a release that still had provider settings,
+ * or a save folder to point a file dialog at.
  * @param {unknown} raw
  * @returns {Settings}
  */
