@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Download, X } from 'lucide-react'
 import { useSession } from '@/state/SessionContext'
 import { useToast } from '@/state/ToastContext'
@@ -14,7 +14,7 @@ import {
 } from '@/components/ui/select'
 import { aggregateSession, buildStreams, streamLabel } from '@lib/aggregate.mjs'
 import { evaluatedCount } from '@lib/evalFile.mjs'
-import { TICKET_STATUSES, type AggregateResult, type EvalFile, type Ticket } from '@shared/types'
+import { TICKET_STATUSES, type AggregateResult, type EvalFile, type EvalProperty, type Ticket } from '@shared/types'
 import { formatComparisonCell, formatRollup, formatStreamCell } from '@/lib/aggregateFormat'
 import { errorMessage, formatInt } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -242,16 +242,19 @@ function ResultsTable({
   onOpen: (t: Ticket) => void
 }) {
   const schema = file.meta.config.schema
+  // A fixed layout splits the width the box has instead of growing to fit the longest value, so a
+  // multi-select's joined options wrap inside their column. The min-width only bites on a schema
+  // with so many properties that their columns would be too narrow to read, and then it scrolls.
   return (
     <div className="brutal-box overflow-x-auto">
-      <table className="w-full border-collapse text-xs">
+      <table className="w-full table-fixed border-collapse text-xs" style={{ minWidth: `${25 + schema.length * 9}rem` }}>
         <thead>
           <tr className="border-b-2 border-ink bg-ink text-paper">
             <Th className="w-14">#</Th>
-            <Th className="min-w-[16rem] text-left">Subject</Th>
-            <Th className="w-20">Status</Th>
+            <Th className="w-64 text-left">Subject</Th>
+            <Th className="w-24">Status</Th>
             {schema.map((p) => (
-              <Th key={p.key} className="min-w-[9rem] text-left">
+              <Th key={p.key} className="text-left">
                 {p.label}
               </Th>
             ))}
@@ -267,12 +270,12 @@ function ResultsTable({
                 className="cursor-pointer border-b border-ink/10 hover:bg-ink/[0.04]"
               >
                 <td className="px-3 py-2 font-mono text-ink/60">#{t.id}</td>
-                <td className="max-w-0 truncate px-3 py-2" title={t.subject}>
+                <td className="truncate px-3 py-2" title={t.subject}>
                   {t.subject || <span className="text-ink/30">(no subject)</span>}
                 </td>
                 <td className="px-3 py-2 font-mono text-[10px] uppercase tracking-widest text-ink/60">{t.status}</td>
                 {schema.map((p) => (
-                  <Cell key={p.key} ta={ta} propKey={p.key} mode={mode} />
+                  <Cell key={p.key} ta={ta} prop={p} mode={mode} />
                 ))}
               </tr>
             )
@@ -283,18 +286,37 @@ function ResultsTable({
   )
 }
 
-function Cell({ ta, propKey, mode }: { ta: import('@shared/types').TicketAggregate | undefined; propKey: string; mode: Mode }) {
-  if (!ta) return <td className="px-3 py-2 font-mono text-[11px] text-ink/30">—</td>
+function Cell({ ta, prop, mode }: { ta: import('@shared/types').TicketAggregate | undefined; prop: EvalProperty; mode: Mode }) {
+  const propKey = prop.key
+  const base = 'px-3 py-2 font-mono text-[11px] [overflow-wrap:anywhere]'
+  if (!ta) return <td className={cn(base, 'text-ink/30')}>—</td>
   if (mode === 'llm') {
-    return <td className="px-3 py-2 font-mono text-[11px] text-ink/80">{formatStreamCell(ta.llm[propKey])}</td>
+    return <td className={cn(base, 'text-ink/80')}>{breakable(formatStreamCell(ta.llm[propKey], prop))}</td>
   }
   if (mode === 'human') {
-    return <td className="px-3 py-2 font-mono text-[11px] text-ink/80">{formatStreamCell(ta.human[propKey])}</td>
+    return <td className={cn(base, 'text-ink/80')}>{breakable(formatStreamCell(ta.human[propKey], prop))}</td>
   }
-  const { text, disagree } = formatComparisonCell(ta.llm[propKey], ta.human[propKey], ta.comparison[propKey])
-  return (
-    <td className={cn('px-3 py-2 font-mono text-[11px]', disagree ? 'font-bold text-ink' : 'text-ink/80')}>{text}</td>
-  )
+  const { text, disagree } = formatComparisonCell(ta.llm[propKey], ta.human[propKey], ta.comparison[propKey], prop)
+  return <td className={cn(base, disagree ? 'font-bold text-ink' : 'text-ink/80')}>{breakable(text)}</td>
+}
+
+/**
+ * Offers a line break after each `+` that joins a multi-select's options. Browsers never break
+ * there on their own, so without it a long set wraps mid-name (`overflow-wrap: anywhere`). The
+ * lookarounds leave the sign of a score delta (`Δ+1.0`) alone.
+ */
+function breakable(text: string): ReactNode {
+  const parts = text.split(/(?<=\w)\+(?=\w)/)
+  return parts.map((part, i) => (
+    <Fragment key={i}>
+      {part}
+      {i < parts.length - 1 ? (
+        <>
+          +<wbr />
+        </>
+      ) : null}
+    </Fragment>
+  ))
 }
 
 function Th({ children, className }: { children: ReactNode; className?: string }) {

@@ -25,7 +25,7 @@ describe('ensureConfigStamped', () => {
       appVersion: '0.1.0',
       now: '2026-07-02T00:00:00.000Z',
       dataset: { fingerprint: 'sha256:aaa', ticketCount: 1, source: null },
-      config: { fingerprint: fp, schema, rules: DEFAULT_RULES }
+      config: { fingerprint: fp, scorer: 'claude', schema, rules: DEFAULT_RULES }
     })
 
   it('re-stamps an unlocked working file to match the current schema/rules', async () => {
@@ -50,6 +50,32 @@ describe('ensureConfigStamped', () => {
     await ws.commitWorkingFile(locked)
     await ws.ensureConfigStamped()
     expect(ws.currentWorkingFile()!.meta.config.fingerprint).toBe('sha256:frozen')
+  })
+})
+
+describe('scorer', () => {
+  const jevSchema: EvalSchema = [{ key: 'solved', label: 'Solved', type: 'boolean', instructions: 'Was it solved?' }]
+  const tickets = [
+    { id: 1, subject: 'S', status: 'open', messages: [{ from: { name: 'A', email: 'a@x.biz' }, body: 'b', isStaff: false, createdAt: 'now' }] }
+  ]
+
+  it('stamps the scorer and its fingerprint into a new working file, and hydrates them back', async () => {
+    const settings = new SettingsStore(join(dir, 'a'))
+    await settings.set({ scorer: 'jev', schema: jevSchema })
+    const ticketsPath = join(dir, 'tickets.json')
+    await atomicWriteJson(ticketsPath, tickets)
+    const ws = new Workspace(settings, '0.1.0', () => 'now')
+    const snap = await ws.open(ticketsPath)
+    const config = snap.workingFile.meta.config
+    expect(config.scorer).toBe('jev')
+    expect(config.schema[0].instructions).toBe('Was it solved?')
+    expect(config.fingerprint).toBe(configFingerprint(jevSchema, DEFAULT_RULES, 'jev'))
+
+    // A second session opening that file under claude settings takes the file's scorer.
+    const other = new SettingsStore(join(dir, 'b'))
+    await new Workspace(other, '0.1.0', () => 'now').hydrateSettingsFromFile(snap.workingFile)
+    expect((await other.get()).scorer).toBe('jev')
+    expect((await other.get()).schema[0].instructions).toBe('Was it solved?')
   })
 })
 
@@ -90,7 +116,7 @@ describe('explicit-path file operations', () => {
     await ws.open(ticketsPath)
     const out = join(home, 'run.qval.json')
 
-    expect(await ws.save()).toBeNull() // nowhere to write yet — the caller owns Save-As
+    expect(await ws.save()).toBeNull() // nowhere to write yet, so the caller owns Save-As
     expect(await ws.save(out)).toBe(out)
     expect(ws.currentPath()).toBe(out)
     expect(await ws.save()).toBe(out) // now bound
@@ -117,7 +143,7 @@ describe('explicit-path file operations', () => {
     const out = join(home, 'run.qval.json')
     await ws.save(out)
 
-    // Workspaces with no memory of the dataset at all — only the locator can supply it.
+    // Workspaces with no memory of the dataset at all. Only the locator can supply it.
     let n = 0
     const fresh = () => new Workspace(new SettingsStore(join(dir, `cold-${n++}`)), '0.1.0', () => 'now')
 
@@ -208,7 +234,7 @@ describe('working file persistence', () => {
       appVersion: '0.1.0',
       now: '2026-07-02T00:00:00.000Z',
       dataset: { fingerprint: 'sha256:aaa', ticketCount: 2, source: null },
-      config: { fingerprint: 'sha256:bbb', schema: DEFAULT_SCHEMA, rules: DEFAULT_RULES }
+      config: { fingerprint: 'sha256:bbb', scorer: 'claude', schema: DEFAULT_SCHEMA, rules: DEFAULT_RULES }
     })
     const path = join(dir, 'run.qval.json')
     await atomicWriteJson(path, file)

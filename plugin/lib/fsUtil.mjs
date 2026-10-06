@@ -22,9 +22,23 @@ let writeSeq = 0
  * @returns {Promise<void>}
  */
 export async function atomicWriteJson(filePath, data, options = {}) {
+  await atomicWriteText(filePath, JSON.stringify(data, null, 2), options)
+}
+
+/**
+ * Atomically write a string to `filePath`, the same way `atomicWriteJson` writes JSON. For the
+ * config files that are text, such as `EVAL_RULES.md`, which a crash must not leave half-written
+ * beside a schema that was written whole.
+ * @param {string} filePath
+ * @param {string} text
+ * @param {object} [options]
+ * @param {number} [options.mode] as for `atomicWriteJson`
+ * @returns {Promise<void>}
+ */
+export async function atomicWriteText(filePath, text, options = {}) {
   await fs.mkdir(dirname(filePath), { recursive: true })
   const tmp = `${filePath}.${process.pid}.${writeSeq++}.tmp`
-  await fs.writeFile(tmp, JSON.stringify(data, null, 2), {
+  await fs.writeFile(tmp, text, {
     encoding: 'utf-8',
     mode: options.mode ?? 0o666
   })

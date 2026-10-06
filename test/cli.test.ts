@@ -64,15 +64,22 @@ afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true })
 })
 
+/** The config `/qval:draft` would have left behind. A new evaluation will not start without one. */
+const DRAFTED_SCHEMA = { scorer: 'claude', properties: [{ key: 'resolved', label: 'Resolved', type: 'boolean' }] }
+const DRAFTED_RULES = 'Was the problem solved?\n'
+
 /**
- * A working directory holding a tickets.json, plus whatever else the case needs. A key with a `/`
- * in it is written into the subdirectory, which is how the Qbort layout is built.
+ * A working directory holding a tickets.json and a drafted config, plus whatever else the case
+ * needs. A key with a `/` in it is written into the subdirectory, which is how the Qbort layout is
+ * built. A `null` value leaves that file out, which is how a case gets a directory with no config.
  */
 async function home(name: string, files: Record<string, unknown> = {}) {
   const path = join(dir, name)
   await fs.mkdir(path, { recursive: true })
   writeFileSync(join(path, 'tickets.json'), JSON.stringify(TICKETS, null, 2))
-  for (const [file, value] of Object.entries(files)) {
+  const all = { 'EVAL_SCHEMA.json': DRAFTED_SCHEMA, 'EVAL_RULES.md': DRAFTED_RULES, ...files }
+  for (const [file, value] of Object.entries(all)) {
+    if (value === null) continue
     await fs.mkdir(dirname(join(path, file)), { recursive: true })
     writeFileSync(join(path, file), typeof value === 'string' ? value : JSON.stringify(value, null, 2))
   }
@@ -190,7 +197,7 @@ describe('serve: what it opens', () => {
   it('resumes an eval file left loose in the working directory by an older version', async () => {
     // Every version before qval-output/ existed wrote the eval file here. Starting a second, empty
     // evaluation beside a full one would look like losing every score, so the old location still
-    // counts — both for what `serve` opens and for what it offers to merge.
+    // counts, both for what `serve` opens and for what it offers to merge.
     const source = await home('legacy-source')
     qval(source, ['serve', '--no-open'])
     await post((await readRecord(source))!.url!, '/api/done')
@@ -241,6 +248,8 @@ describe('serve: what it opens', () => {
   it('points at an explicit path when the directory holds no dataset at all', async () => {
     const cwd = join(dir, 'nothing')
     await fs.mkdir(cwd, { recursive: true })
+    writeFileSync(join(cwd, 'EVAL_SCHEMA.json'), JSON.stringify(DRAFTED_SCHEMA))
+    writeFileSync(join(cwd, 'EVAL_RULES.md'), DRAFTED_RULES)
     const res = qval(cwd, ['serve', '--no-open'])
 
     expect(res.status).toBe(2)
@@ -248,7 +257,7 @@ describe('serve: what it opens', () => {
     // The way out has to be in the message: the dataset may simply live somewhere else.
     expect(res.err).toContain('qval serve <path>')
 
-    // And that is genuinely a way out — a path outside the working directory is accepted.
+    // And that is genuinely a way out. A path outside the working directory is accepted.
     const elsewhere = await home('elsewhere-data')
     const res2 = qval(cwd, ['serve', join(elsewhere, 'tickets.json'), '--no-open'])
     expect(res2.out.split('\n')[0]).toBe('SERVING')
@@ -442,7 +451,7 @@ describe('status', () => {
 // --- The config the two halves share -----------------------------------------
 
 describe('shared config with the engine', () => {
-  it('seeds the session from EVAL_SCHEMA.json and writes back what was used', async () => {
+  it('starts the session from EVAL_SCHEMA.json and writes back what was used', async () => {
     const schema = [{ key: 'tone', label: 'Tone', type: 'enum', options: ['warm', 'curt'] }]
     const cwd = await home('config', { 'EVAL_SCHEMA.json': schema, 'EVAL_RULES.md': 'Judge the tone.\n' })
 
@@ -464,13 +473,40 @@ describe('shared config with the engine', () => {
     }
 
     expect(await fs.readFile(join(cwd, 'EVAL_RULES.md'), 'utf8')).toBe('Judge the tone, generously.\n')
-    expect(await readJson(join(cwd, 'EVAL_SCHEMA.json'))).toMatchObject([{ key: 'tone' }])
+    // Written back in the wrapped form, even though it was read from a bare array.
+    expect(await readJson(join(cwd, 'EVAL_SCHEMA.json'))).toMatchObject({ scorer: 'claude', properties: [{ key: 'tone' }] })
     expect(qval(cwd, ['status']).out).toContain('CONFIG_WRITTEN')
+  })
+
+  it('starts from the scorer and the jev fields of the wrapped form and writes them back', async () => {
+    const schema = {
+      scorer: 'jev',
+      properties: [
+        { key: 'tone', label: 'Tone', type: 'enum', options: ['warm', 'curt'], instructions: 'How did it sound?' }
+      ]
+    }
+    const cwd = await home('config-jev', { 'EVAL_SCHEMA.json': schema, 'EVAL_RULES.md': 'Judge the tone.\n' })
+    const url = field(qval(cwd, ['serve', '--no-open']).out, 'URL')!
+    const session = (await (
+      await fetch(`${new URL(url).origin}/api/session`, { headers: { 'X-Qval-Token': new URL(url).searchParams.get('t')! } })
+    ).json()) as { settings: { scorer: string; schema: { instructions?: string }[] } }
+    expect(session.settings.scorer).toBe('jev')
+    expect(session.settings.schema[0].instructions).toBe('How did it sound?')
+
+    await post(url, '/api/config', { rules: 'Judge the tone, generously.\n' })
+    await post(url, '/api/done')
+    for (let i = 0; i < 50 && (await readRecord(cwd))?.status === 'live'; i++) {
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    expect(await readJson(join(cwd, 'EVAL_SCHEMA.json'))).toMatchObject({
+      scorer: 'jev',
+      properties: [{ key: 'tone', instructions: 'How did it sound?' }]
+    })
   })
 
   it('leaves the config files alone when the session did not change them', async () => {
     // They are the user's files, often hand-written. A session that only reads must not rewrite
-    // them — not even into an equivalent-but-reformatted shape.
+    // them, not even into an equivalent-but-reformatted shape.
     const schema = [{ key: 'tone', label: 'Tone', type: 'enum', options: ['warm', 'curt'] }]
     const cwd = await home('config-untouched', { 'EVAL_SCHEMA.json': schema, 'EVAL_RULES.md': 'Judge the tone.\n' })
     const before = {
@@ -479,7 +515,7 @@ describe('shared config with the engine', () => {
     }
 
     const url = field(qval(cwd, ['serve', '--no-open']).out, 'URL')!
-    // A human score, so the session did real work — just not to the config.
+    // A human score, so the session did real work, just not to the config.
     await post(url, '/api/result', { ticketId: 1, values: { tone: 'warm' } })
     await post(url, '/api/done')
     for (let i = 0; i < 50 && (await readRecord(cwd))?.status === 'live'; i++) {
@@ -489,6 +525,117 @@ describe('shared config with the engine', () => {
     expect(await fs.readFile(join(cwd, 'EVAL_SCHEMA.json'), 'utf8')).toBe(before.schema)
     expect(await fs.readFile(join(cwd, 'EVAL_RULES.md'), 'utf8')).toBe(before.rules)
     expect(qval(cwd, ['status']).out).not.toContain('CONFIG_WRITTEN')
+  })
+})
+
+// --- Where a session's config comes from --------------------------------------
+
+/** Post DONE and wait for the child to record the outcome, which is when any write-back happens. */
+async function finish(cwd: string, url: string) {
+  await post(url, '/api/done')
+  for (let i = 0; i < 50 && (await readRecord(cwd))?.status === 'live'; i++) {
+    await new Promise((r) => setTimeout(r, 50))
+  }
+}
+
+async function sessionSettings(url: string) {
+  const u = new URL(url)
+  const res = await fetch(`${u.origin}/api/session`, { headers: { 'X-Qval-Token': u.searchParams.get('t')! } })
+  return ((await res.json()) as { settings: { schema: { key: string }[]; rules: string } }).settings
+}
+
+describe('serve: the config a session starts from', () => {
+  it('refuses a new evaluation without EVAL_SCHEMA.json, and writes nothing', async () => {
+    const cwd = await home('no-config', { 'EVAL_SCHEMA.json': null, 'EVAL_RULES.md': null })
+    const res = qval(cwd, ['serve', '--no-open'])
+
+    expect(res.status).toBe(2)
+    expect(res.err).toMatch(/^NO_CONFIG EVAL_SCHEMA\.json, EVAL_RULES\.md/)
+    expect(res.err).toContain('/qval:draft')
+    // Not an empty eval file stamped with a starter schema, and no settings either.
+    await expect(fs.stat(join(cwd, 'qval-output'))).rejects.toThrow()
+    await expect(fs.stat(join(cwd, '.qval-run'))).rejects.toThrow()
+  })
+
+  it('treats half a config as none, naming the missing file', async () => {
+    const cwd = await home('half-config', { 'EVAL_RULES.md': null })
+    const res = qval(cwd, ['serve', '--no-open'])
+
+    expect(res.status).toBe(2)
+    expect(res.err).toMatch(/^NO_CONFIG EVAL_RULES\.md$/m)
+    await expect(fs.stat(join(cwd, 'qval-output'))).rejects.toThrow()
+  })
+
+  it('refuses a schema file that would only normalize to the built-in default', async () => {
+    const cwd = await home('empty-config', { 'EVAL_SCHEMA.json': { scorer: 'claude', properties: [] } })
+    const res = qval(cwd, ['serve', '--no-open'])
+
+    expect(res.status).toBe(2)
+    expect(res.err).toMatch(/^NO_CONFIG EVAL_SCHEMA\.json is not a usable schema/)
+  })
+
+  it('opens an existing eval file with no config files at all, since it carries its own', async () => {
+    const source = await home('own-config-source')
+    qval(source, ['serve', '--no-open'])
+    await finish(source, (await readRecord(source))!.url!)
+
+    const cwd = await home('own-config', { 'EVAL_SCHEMA.json': null, 'EVAL_RULES.md': null })
+    await fs.mkdir(join(cwd, 'qval-output'), { recursive: true })
+    writeFileSync(outPath(cwd, 'tickets.qval.json'), readFileSync(outPath(source, 'tickets.qval.json')))
+    const res = qval(cwd, ['serve', '--no-open'])
+
+    expect(res.out.split('\n')[0]).toBe('SERVING')
+    expect((await sessionSettings(field(res.out, 'URL')!)).schema.map((p) => p.key)).toEqual(['resolved'])
+    // And nothing appeared in the working directory just for having looked.
+    await finish(cwd, field(res.out, 'URL')!)
+    await expect(fs.stat(join(cwd, 'EVAL_SCHEMA.json'))).rejects.toThrow()
+  })
+
+  it('moves an unscored eval file onto the current config, without writing that config back', async () => {
+    const cwd = await home('adopt')
+    await finish(cwd, field(qval(cwd, ['serve', '--no-open']).out, 'URL')!)
+    const stale = (await readJson<{ meta: { config: { fingerprint: string } } }>(outPath(cwd, 'tickets.qval.json')))!
+
+    // The config was redrafted since. Nothing was ever scored against the old one.
+    const redrafted = JSON.stringify({ scorer: 'claude', properties: [{ key: 'tone', label: 'Tone', type: 'enum', options: ['warm', 'curt'] }] })
+    writeFileSync(join(cwd, 'EVAL_SCHEMA.json'), redrafted)
+    writeFileSync(join(cwd, 'EVAL_RULES.md'), 'Judge the tone.\n')
+
+    const url = field(qval(cwd, ['serve', '--no-open']).out, 'URL')!
+    const settings = await sessionSettings(url)
+    expect(settings.schema.map((p) => p.key)).toEqual(['tone'])
+    expect(settings.rules).toBe('Judge the tone.\n')
+    // The file itself is restamped, so the engine sees the same config the browser shows.
+    const file = (await readJson<{ meta: { config: { fingerprint: string; schema: { key: string }[] } } }>(
+      outPath(cwd, 'tickets.qval.json')
+    ))!
+    expect(file.meta.config.fingerprint).not.toBe(stale.meta.config.fingerprint)
+    expect(file.meta.config.schema.map((p) => p.key)).toEqual(['tone'])
+
+    // Adopting is where the session started, not an edit, so the user's files are left as written.
+    await finish(cwd, url)
+    expect(await fs.readFile(join(cwd, 'EVAL_SCHEMA.json'), 'utf8')).toBe(redrafted)
+    expect(qval(cwd, ['status']).out).not.toContain('CONFIG_WRITTEN')
+  })
+
+  it('keeps a scored eval file on its own config, and leaves the current config files alone', async () => {
+    const cwd = await home('keep')
+    const first = field(qval(cwd, ['serve', '--no-open']).out, 'URL')!
+    await post(first, '/api/result', { ticketId: 1, values: { resolved: true } })
+    await finish(cwd, first)
+    const before = await fs.readFile(outPath(cwd, 'tickets.qval.json'), 'utf8')
+
+    const redrafted = JSON.stringify({ scorer: 'claude', properties: [{ key: 'tone', label: 'Tone', type: 'enum', options: ['warm', 'curt'] }] })
+    writeFileSync(join(cwd, 'EVAL_SCHEMA.json'), redrafted)
+    writeFileSync(join(cwd, 'EVAL_RULES.md'), 'Judge the tone.\n')
+
+    const url = field(qval(cwd, ['serve', '--no-open']).out, 'URL')!
+    expect((await sessionSettings(url)).schema.map((p) => p.key)).toEqual(['resolved'])
+    await finish(cwd, url)
+
+    expect(await fs.readFile(outPath(cwd, 'tickets.qval.json'), 'utf8')).toBe(before)
+    expect(await fs.readFile(join(cwd, 'EVAL_SCHEMA.json'), 'utf8')).toBe(redrafted)
+    expect(await fs.readFile(join(cwd, 'EVAL_RULES.md'), 'utf8')).toBe('Judge the tone.\n')
   })
 })
 

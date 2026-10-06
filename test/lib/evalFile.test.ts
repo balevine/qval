@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  adoptConfig,
   applyHumanValues,
   applyLlmResults,
   CLAUDE_CODE_PROVIDER,
@@ -12,7 +13,8 @@ import {
   needsAttention,
   normalizeEvalFile,
   ownResults,
-  summarizeEvalFile
+  summarizeEvalFile,
+  TYPESAFE_PROVIDER
 } from '@lib/evalFile.mjs'
 import { DEFAULT_SCHEMA } from '@lib/schema.mjs'
 import { DEFAULT_RULES } from '@lib/rules.mjs'
@@ -23,7 +25,7 @@ const working = (): EvalFile =>
     appVersion: '0.1.0',
     now: '2026-07-02T00:00:00.000Z',
     dataset: { fingerprint: 'sha256:aaa', ticketCount: 3, source: { provider: 'anthropic', model: 'm' } },
-    config: { fingerprint: 'sha256:bbb', schema: DEFAULT_SCHEMA, rules: DEFAULT_RULES }
+    config: { fingerprint: 'sha256:bbb', scorer: 'claude', schema: DEFAULT_SCHEMA, rules: DEFAULT_RULES }
   })
 
 describe('createWorkingFile', () => {
@@ -86,6 +88,36 @@ describe('normalizeEvalFile', () => {
     const norm = normalizeEvalFile(raw)!
     expect(norm.meta.config.schema).toEqual(DEFAULT_SCHEMA) // [] → default
     expect(typeof norm.meta.config.rules).toBe('string')
+  })
+
+  it('reads a config snapshot without a scorer as claude', () => {
+    const f = working()
+    const { scorer: _omit, ...config } = f.meta.config
+    const norm = normalizeEvalFile({ ...f, meta: { ...f.meta, config } })!
+    expect(norm.meta.config.scorer).toBe('claude')
+  })
+
+  it('keeps a jev snapshot\'s scorer and its questions', () => {
+    const f = working()
+    const schema = [{ key: 'solved', label: 'Solved', type: 'boolean', instructions: 'Was it solved?' }]
+    const norm = normalizeEvalFile({ ...f, meta: { ...f.meta, config: { ...f.meta.config, scorer: 'jev', schema } } })!
+    expect(norm.meta.config.scorer).toBe('jev')
+    expect(norm.meta.config.schema[0].instructions).toBe('Was it solved?')
+  })
+
+  it("keeps the model Jev reported on a result, and drops a malformed one without failing the result", () => {
+    const f = applyLlmResults(working(), {
+      provider: TYPESAFE_PROVIDER,
+      model: 'jev-latest',
+      results: [
+        { ticketId: 1, values: { resolved: true }, evaluatedAt: 't', error: null, reportedModel: 'jev-1.13' },
+        { ticketId: 2, values: { resolved: false }, evaluatedAt: 't', error: null, reportedModel: 42 as unknown as string }
+      ]
+    })
+    const [one, two] = normalizeEvalFile(JSON.parse(JSON.stringify(f)))!.evaluators[0].results
+    expect(one.reportedModel).toBe('jev-1.13')
+    expect(two).toMatchObject({ ticketId: 2, values: { resolved: false } })
+    expect(two.reportedModel).toBeUndefined()
   })
 })
 
@@ -226,7 +258,7 @@ describe('applyHumanValues', () => {
 })
 
 describe('evaluatedCount', () => {
-  it('counts only results with ≥1 non-empty value — ignores errored and all-dropped (same for both streams)', () => {
+  it('counts only results with ≥1 non-empty value, ignoring errored and all-dropped (same for both streams)', () => {
     const f = applyLlmResults(working(), {
       provider: 'ollama',
       model: 'm',
@@ -242,7 +274,7 @@ describe('evaluatedCount', () => {
 })
 
 describe('needsAttention', () => {
-  it('flags a missing, errored, or dropped-value result — and only those', () => {
+  it('flags a missing, errored, or dropped-value result, and only those', () => {
     expect(needsAttention(undefined)).toBe(true) // never scored
     expect(needsAttention({ ticketId: 1, values: {}, evaluatedAt: 't', error: 'boom' })).toBe(true)
     expect(
@@ -299,6 +331,30 @@ describe('config lock + model pin', () => {
   it('pins whatever an older release recorded, so its files still read', () => {
     const f = applyLlmResults(working(), { provider: 'ollama', model: 'llama3.1', results: [llmResult(1)] })
     expect(lockedLlmProvider(f)).toEqual({ provider: 'ollama', model: 'llama3.1' })
+  })
+
+  const nextConfig = { fingerprint: 'sha256:ccc', scorer: 'claude' as const, schema: DEFAULT_SCHEMA.slice(0, 1), rules: 'New rules.' }
+
+  it('adoptConfig restamps an unscored file, keeping its error-only results and the input untouched', () => {
+    const f = applyLlmResults(working(), {
+      provider: CLAUDE_CODE_PROVIDER,
+      model: 'Opus 5',
+      results: [llmResult(1, { values: {}, error: 'boom' })]
+    })
+    const before = structuredClone(f)
+    const next = adoptConfig(f, nextConfig, now)
+    expect(next.meta.config).toEqual(nextConfig)
+    expect(next.meta.updatedAt).toBe(now)
+    expect(next.meta.dataset).toEqual(f.meta.dataset)
+    expect(next.evaluators).toEqual(f.evaluators)
+    expect(f).toEqual(before)
+  })
+
+  it('adoptConfig refuses a file with any score, llm or human', () => {
+    const human = applyHumanValues(working(), { name: 'B', ticketId: 1, values: { resolved: true }, now })
+    expect(() => adoptConfig(human, nextConfig, now)).toThrow(/locked/)
+    const llm = applyLlmResults(working(), { provider: CLAUDE_CODE_PROVIDER, model: 'Opus 5', results: [llmResult(1)] })
+    expect(() => adoptConfig(llm, nextConfig, now)).toThrow(/locked/)
   })
 })
 

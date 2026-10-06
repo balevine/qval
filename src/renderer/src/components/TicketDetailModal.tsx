@@ -10,7 +10,7 @@ import { applyHumanValues, ownResults } from '@lib/evalFile.mjs'
 import { aggregateSession, buildStreams, streamLabel } from '@lib/aggregate.mjs'
 import { formatComparisonCell } from '@/lib/aggregateFormat'
 import { cn } from '@/lib/utils'
-import { errorMessage, formatEvalValue, formatInt, formatTimestamp } from '@/lib/format'
+import { errorMessage, formatInt, formatPropertyValue, formatTimestamp } from '@/lib/format'
 import { api } from '@/lib/apiClient'
 import type { ComparisonFile, EvalFile, EvalValues, Ticket } from '@shared/types'
 
@@ -182,11 +182,11 @@ function SideBySide({ file, comparisons, ticketId }: { file: EvalFile; compariso
               <td className="px-2 py-1 font-mono font-bold text-ink">{p.label}</td>
               {cols.map((s, i) => (
                 <td key={i} className={cn('px-2 py-1 font-mono text-ink/70', s.kind === 'human' && cols[i - 1]?.kind === 'llm' && 'border-l-2 border-ink/20')}>
-                  {formatEvalValue(s.byTicket.get(ticketId)?.values[p.key])}
+                  {formatPropertyValue(s.byTicket.get(ticketId)?.values[p.key], p)}
                 </td>
               ))}
               <td className="border-l-2 border-ink/20 px-2 py-1 font-mono text-ink/70">
-                {formatComparisonCell(ta.llm[p.key], ta.human[p.key], ta.comparison[p.key]).text}
+                {formatComparisonCell(ta.llm[p.key], ta.human[p.key], ta.comparison[p.key], p).text}
               </td>
             </tr>
           ))}

@@ -1,10 +1,21 @@
-import type { PropertyAggregate, PropertyRollup, StreamComparison } from '@shared/types'
+import type { EvalProperty, PropertyAggregate, PropertyRollup, StreamComparison } from '@shared/types'
+
+/**
+ * A score mean as a reader would say it. On a levels scale the label carries the meaning and the
+ * index does not, so a mean that sits on a level is just its label. A mean between levels (several
+ * evaluators who split) keeps its number beside the nearest label, so the split stays visible.
+ */
+function scoreText(mean: number, p?: EvalProperty): string {
+  const label = p?.levels?.[Math.round(mean)]?.label
+  if (!label) return mean.toFixed(1)
+  return Math.abs(mean - Math.round(mean)) < 0.05 ? label : `~${label} ${mean.toFixed(1)}`
+}
 
 /** One stream's headline value, compact. */
-function short(agg: PropertyAggregate): string {
+function short(agg: PropertyAggregate, p?: EvalProperty): string {
   switch (agg.type) {
     case 'score':
-      return agg.mean.toFixed(1)
+      return scoreText(agg.mean, p)
     case 'boolean':
       return agg.majority === true ? 'YES' : agg.majority === false ? 'NO' : 'TIE'
     case 'enum':
@@ -18,11 +29,12 @@ function short(agg: PropertyAggregate): string {
 }
 
 /** A single-stream cell (LLM or Human focus mode) with its spread/agreement. */
-export function formatStreamCell(agg: PropertyAggregate | undefined): string {
+export function formatStreamCell(agg: PropertyAggregate | undefined, p?: EvalProperty): string {
   if (!agg) return '—'
   switch (agg.type) {
     case 'score':
-      return agg.n > 1 ? `${agg.mean.toFixed(1)}±${agg.sd.toFixed(1)} (${agg.n})` : agg.mean.toFixed(1)
+      if (agg.n <= 1) return scoreText(agg.mean, p)
+      return `${scoreText(agg.mean, p)}${p?.levels ? ' ' : ''}±${agg.sd.toFixed(1)} (${agg.n})`
     case 'boolean':
       return `${short(agg)} ${Math.round(agg.agreement * 100)}%${agg.n > 1 ? ` (${agg.n})` : ''}`
     case 'enum':
@@ -45,10 +57,11 @@ export function formatStreamCell(agg: PropertyAggregate | undefined): string {
 export function formatComparisonCell(
   llm: PropertyAggregate | undefined,
   human: PropertyAggregate | undefined,
-  cmp: StreamComparison | null
+  cmp: StreamComparison | null,
+  p?: EvalProperty
 ): { text: string; disagree: boolean } {
-  const l = llm ? short(llm) : '—'
-  const h = human ? short(human) : '—'
+  const l = llm ? short(llm, p) : '—'
+  const h = human ? short(human, p) : '—'
   let extra = ''
   let disagree = false
   if (cmp) {
@@ -75,7 +88,7 @@ export function formatRollup(r: PropertyRollup): string {
     case 'agreement':
       return `${Math.round(r.agreementRate * 100)}% agree (n${r.nTickets})`
     case 'enumSet':
-      return `J ${r.meanJaccard.toFixed(2)} (n${r.nTickets})`
+      return `${Math.round(r.meanJaccard * 100)}% (J ${r.meanJaccard.toFixed(2)} | n${r.nTickets})`
     case 'none':
       return '—'
   }

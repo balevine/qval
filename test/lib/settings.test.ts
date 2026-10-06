@@ -48,3 +48,30 @@ describe('mergeSettings', () => {
     expect(merged.schema[0].key).toBe('q')
   })
 })
+
+describe('scorer', () => {
+  const jevProp = { key: 'solved', label: 'Solved', type: 'boolean' as const, instructions: 'Was it solved?' }
+
+  it('defaults to claude, including for a settings file written before the field existed', () => {
+    expect(DEFAULT_SETTINGS.scorer).toBe('claude')
+    expect(withDefaults({ evaluatorName: 'Ada' }).scorer).toBe('claude')
+    expect(withDefaults({ scorer: 'gpt' }).scorer).toBe('claude')
+  })
+
+  it('keeps jev fields only when the scorer is jev', () => {
+    expect(withDefaults({ scorer: 'jev', schema: [jevProp] }).schema[0].instructions).toBe('Was it solved?')
+    expect(withDefaults({ schema: [jevProp] }).schema[0].instructions).toBeUndefined()
+  })
+
+  it('keeps the scorer and the jev fields through a partial update that names neither', () => {
+    const current = withDefaults({ scorer: 'jev', schema: [jevProp] })
+    const merged = mergeSettings(current, { rules: 'be kind' })
+    expect(merged.scorer).toBe('jev')
+    expect(merged.schema[0].instructions).toBe('Was it solved?')
+    // The browser sends the whole schema back, Jev fields included, and they survive.
+    expect(mergeSettings(current, { schema: [{ ...jevProp, label: 'Done' }] }).schema[0]).toMatchObject({
+      label: 'Done',
+      instructions: 'Was it solved?'
+    })
+  })
+})

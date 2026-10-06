@@ -24,7 +24,7 @@ import { atomicWriteJson, readJson } from './fsUtil.mjs'
  * already know. The caller decides how to ask (a cwd scan, under the CLI). Resolves to a path, to a
  * list of candidates to try in order, or to null when there's no answer.
  *
- * A list is safe because the fingerprint, not the caller, decides which one it is — so a host that
+ * A list is safe because the fingerprint, not the caller, decides which one it is. So a host that
  * cannot narrow the directory down to one file should hand over all of them rather than give up.
  * @typedef {() => Promise<string | string[] | null>} DatasetLocator
  */
@@ -38,7 +38,7 @@ import { atomicWriteJson, readJson } from './fsUtil.mjs'
 
 /**
  * Owns the in-memory working session (dataset tickets + working eval file + its path) and all file
- * I/O for it. The renderer holds a display copy but never a filesystem path — the host tracks the
+ * I/O for it. The renderer holds a display copy but never a filesystem path. The host tracks the
  * path and does atomic writes.
  */
 export class Workspace {
@@ -151,24 +151,28 @@ export class Workspace {
     await this.adoptExternalWrite()
     if (!this.workingFile || configLocked(this.workingFile)) return
     const s = await this.settings.get()
-    const fingerprint = await configFingerprint(s.schema, s.rules)
+    const fingerprint = await configFingerprint(s.schema, s.rules, s.scorer)
     if (this.workingFile.meta.config.fingerprint === fingerprint) return
     await this.commitWorkingFile({
       ...this.workingFile,
-      meta: { ...this.workingFile.meta, config: { fingerprint, schema: s.schema, rules: s.rules } }
+      meta: {
+        ...this.workingFile.meta,
+        config: { fingerprint, scorer: s.scorer, schema: s.schema, rules: s.rules }
+      }
     })
   }
 
   /**
    * The loaded file is the authoritative config source: reload the working schema/rules from its
    * snapshot so the editors mirror the file (and, once locked, stay pinned to it). Called on
-   * open/reload. The model that produced the file is not settings — it lives on the file's
+   * open/reload. The model that produced the file is not settings. It lives on the file's
    * own `llm` evaluator, which is what pins a top-up run (`lockedLlmProvider`).
    * @param {EvalFile} file
    * @returns {Promise<void>}
    */
   async hydrateSettingsFromFile(file) {
-    await this.settings.set({ schema: file.meta.config.schema, rules: file.meta.config.rules })
+    const { scorer, schema, rules } = file.meta.config
+    await this.settings.set({ scorer, schema, rules })
   }
 
   /**
@@ -251,7 +255,7 @@ export class Workspace {
     const s = await this.settings.get()
     const [fp, cfp] = await Promise.all([
       datasetFingerprint(tickets),
-      configFingerprint(s.schema, s.rules)
+      configFingerprint(s.schema, s.rules, s.scorer)
     ])
     this.tickets = tickets
     this.datasetFp = fp
@@ -259,7 +263,7 @@ export class Workspace {
       appVersion: this.appVersion,
       now: this.now(),
       dataset: { fingerprint: fp, ticketCount: tickets.length, source },
-      config: { fingerprint: cfp, schema: s.schema, rules: s.rules }
+      config: { fingerprint: cfp, scorer: s.scorer, schema: s.schema, rules: s.rules }
     })
     this.workingPath = null
     this.comparisons = []

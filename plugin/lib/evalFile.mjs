@@ -6,7 +6,7 @@
 // array it sits in (results, evaluators), while a missing required field (meta.app, either
 // fingerprint) makes the whole file unreadable. Half-parsed files are worse than rejected ones.
 
-import { normalizeSchema } from './schema.mjs'
+import { normalizeSchema, normalizeScorer } from './schema.mjs'
 import { normalizeRules } from './rules.mjs'
 import { hasDrops } from './evalValidate.mjs'
 
@@ -26,8 +26,8 @@ export const LLM_EVALUATOR_ID = 'llm'
 export const HUMAN_EVALUATOR_ID = 'human'
 
 /**
- * The `provider` every LLM evaluator Qval writes now carries: the evaluation runs inside Claude
- * Code with the ambient model. This is the only definition of that string. The skill engine stamps
+ * The `provider` of an LLM evaluator scored by Claude: the evaluation runs inside Claude Code with
+ * the ambient model. This is the only definition of that string. The skill engine stamps
  * it onto the evaluator and gates `PROVIDER_LOCKED` on it, so a second copy that drifted would
  * refuse a file the engine itself had written.
  *
@@ -37,8 +37,31 @@ export const HUMAN_EVALUATOR_ID = 'human'
  */
 export const CLAUDE_CODE_PROVIDER = 'claude-code'
 
+/**
+ * The `provider` of an `llm` evaluator scored by Jev, through Typesafe's API. It gates the Jev
+ * branch of `PROVIDER_LOCKED` the same way `CLAUDE_CODE_PROVIDER` gates the Claude one, which is why
+ * it is defined once, here.
+ */
+export const TYPESAFE_PROVIDER = 'typesafe'
+
 function isObject(v) {
   return !!v && typeof v === 'object' && !Array.isArray(v)
+}
+
+/**
+ * A file written before scorers existed has no `scorer` in its snapshot and was scored by Claude.
+ * The schema is normalized under the scorer the file declares, so a Jev file keeps its questions.
+ * @param {Record<string, any>} config
+ * @returns {ConfigSnapshot}
+ */
+function normalizeConfigSnapshot(config) {
+  const scorer = normalizeScorer(config.scorer)
+  return {
+    fingerprint: config.fingerprint,
+    scorer,
+    schema: normalizeSchema(config.schema, scorer),
+    rules: normalizeRules(config.rules)
+  }
 }
 
 // --- Construction ------------------------------------------------------------
@@ -256,6 +279,22 @@ export function configLocked(file) {
 }
 
 /**
+ * Restamp an unscored file with a different config. This is the in-place counterpart of the lock
+ * above: until something is scored, no value in the file was produced under the old criteria, so
+ * nothing can disagree with the new snapshot. An empty file left behind by an early mistake (a
+ * review opened before the config was drafted) would otherwise block every later run. Pure.
+ * Throws on a locked file, because restamping one would make its fingerprint lie about its scores.
+ * @param {EvalFile} file
+ * @param {ConfigSnapshot} config
+ * @param {string} now
+ * @returns {EvalFile}
+ */
+export function adoptConfig(file, config, now) {
+  if (configLocked(file)) throw new Error('adoptConfig: this eval file has scores, so its config is locked')
+  return { ...file, meta: { ...file.meta, updatedAt: now, config } }
+}
+
+/**
  * The provider/model the file's scored LLM evaluator was produced with. One model must score every
  * ticket in a file, so `plan` pins a top-up run to whatever this returns.
  * @param {EvalFile} file
@@ -322,6 +361,8 @@ function parseResult(raw) {
     if (!issues.ok) return { ok: false }
     out.issues = issues.value
   }
+  // Metadata only, so a malformed one is dropped rather than failing the result.
+  if (typeof raw.reportedModel === 'string' && raw.reportedModel) out.reportedModel = raw.reportedModel
   return { ok: true, value: out }
 }
 
@@ -414,11 +455,7 @@ export function normalizeEvalFile(raw) {
             : 0,
         source: parseDatasetSource(meta.dataset.source)
       },
-      config: {
-        fingerprint: meta.config.fingerprint,
-        schema: normalizeSchema(meta.config.schema),
-        rules: normalizeRules(meta.config.rules)
-      }
+      config: normalizeConfigSnapshot(meta.config)
     },
     evaluators: deduped
   }

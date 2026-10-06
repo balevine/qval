@@ -3,8 +3,8 @@
  *
  * It lives in `test/` rather than beside the module because it crosses the repo/plugin boundary,
  * the same reason `skillEngine.test.ts` does. Every test drives a real listening server over real
- * HTTP on an OS-assigned loopback port, because the things worth checking here — the `Host`
- * allowlist, the token, `Sec-Fetch-Site` — are all properties of actual requests.
+ * HTTP on an OS-assigned loopback port, because the things worth checking here (the `Host`
+ * allowlist, the token, `Sec-Fetch-Site`) are all properties of actual requests.
  */
 
 import { createHash } from 'node:crypto'
@@ -234,8 +234,8 @@ describe('POST /api/result', () => {
     const human = onDisk.evaluators.find((e) => e.kind === 'human')!
     expect(human.name).toBe('Ada')
     expect(human.results[0].ticketId).toBe(1)
-    // Clamped to the range, and the off-schema key is gone. Human results carry no `issues[]` —
-    // that repair trail belongs to the LLM, and this matches what the app's IPC path persists.
+    // Clamped to the range, and the off-schema key is gone. Human results carry no `issues[]`.
+    // That repair trail belongs to the LLM, and this matches what the app's IPC path persists.
     expect(human.results[0].values).toEqual({ empathy: 5 })
   })
 
@@ -339,6 +339,35 @@ describe('POST /api/config', () => {
     const { call } = await start()
     expect((await call('/api/config', { method: 'POST', body: '{}' })).status).toBe(400)
   })
+
+  it('keeps a Jev schema’s fields through a save from the editor, and never takes the scorer', async () => {
+    // The schema editor sends every property back whole, with only the label or description changed,
+    // so a Jev schema has to survive that round trip with its definitions and levels intact.
+    const { call, settings } = await start()
+    const schema = [
+      { key: 'solved', label: 'Solved', type: 'boolean' as const, instructions: 'Was it solved?', trueDescription: 'Fixed.', falseDescription: 'Not fixed.' },
+      { key: 'topic', label: 'Topic', type: 'enum' as const, options: ['bug', 'billing'], instructions: 'What is it about?', optionDescriptions: { bug: 'A defect.' } },
+      { key: 'tone', label: 'Tone', type: 'score' as const, instructions: 'How was the tone?', levels: [{ label: 'Poor' }, { label: 'Warm', description: 'Kind.' }] }
+    ]
+    const seeded = await settings.set({ scorer: 'jev', schema })
+    const edited = seeded.schema.map((p) => (p.key === 'tone' ? { ...p, label: 'Agent tone', description: 'Judge the replies.' } : p))
+
+    const res = await call('/api/config', {
+      method: 'POST',
+      body: JSON.stringify({ schema: edited, scorer: 'claude' })
+    })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { settings: Settings; session: SessionSnapshot }
+
+    expect(body.settings.scorer).toBe('jev')
+    expect(body.settings.schema).toEqual(edited)
+    const [solved, topic, tone] = body.settings.schema
+    expect(solved.trueDescription).toBe('Fixed.')
+    expect(topic.optionDescriptions).toEqual({ bug: 'A defect.' })
+    expect(tone).toMatchObject({ label: 'Agent tone', min: 0, max: 1, step: 1, levels: [{ label: 'Poor' }, { label: 'Warm', description: 'Kind.' }] })
+    expect(body.session.workingFile.meta.config.scorer).toBe('jev')
+    expect(body.session.workingFile.meta.config.schema).toEqual(edited)
+  })
 })
 
 describe('POST /api/comparison', () => {
@@ -355,7 +384,7 @@ describe('POST /api/comparison', () => {
     return path
   }
 
-  it('merges a candidate by id — the path never leaves the host', async () => {
+  it('merges a candidate by id, and the path never leaves the host', async () => {
     const { call, workspace, home } = await start()
     workspace.setComparisonSources([{ id: 'c1', name: 'alice.qval.json', path: await sibling(home, workspace) }])
 

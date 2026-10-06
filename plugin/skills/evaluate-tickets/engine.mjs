@@ -1,20 +1,35 @@
 // Deterministic engine for the evaluate-tickets skill. Owns everything the LLM must NOT: config
 // validation, both fingerprints, target selection, batching, prompt compilation, per-value
 // validation and repair, retry accounting, eval-file assembly, and atomic writes. The only thing
-// left to the ambient Claude subagents is judgment (see SKILL.md).
+// left to the ambient Claude subagents is judgment (see SKILL.md). A Jev run has no subagents at
+// all: `jev` sends each ticket to Typesafe itself and reads the answers in Node.
 //
 // Subcommands:
 //   init                  write the missing config files (EVAL_RULES.md, EVAL_SCHEMA.json) into
 //                         the current directory from the starter constants. Exits 3 when it created
 //                         one, meaning "stop here and let the user edit them".
-//   config [--check]      validate the config and print the property table + config fingerprint
-//          [--write]      rewrite EVAL_SCHEMA.json in normalized form (after a passing check)
+//   config                validate the config for its scorer and print the property table + config
+//                         fingerprint
+//          [--write]      rewrite EVAL_SCHEMA.json in normalized, wrapped form (after a passing check)
 //          [--preview]    print the compiled static prefix the model will read
 //          [--rules <file>] [--schema <file>]
+//   draft-check --scorer claude|jev [--draft <file>]
+//                         validate a drafted config (default .qval-run/draft.json, shape in
+//                         ../draft/DRAFTING.md) and print its property table, notes, warnings, and
+//                         what was taken out of RULES.md. Writes nothing. The draft subcommands are
+//                         run by /qval:draft, which has no engine of its own and calls this one.
+//   draft-apply [--draft <file>]
+//                         re-validate the draft, then write EVAL_SCHEMA.json (normalized, wrapped)
+//                         and EVAL_RULES.md. Never touches RULES.md, which stays the user's source.
 //   plan     --tickets <file> --model "<name>" [--eval-file <file>] [--rules <file>]
 //            [--schema <file>] [--mode all|remaining|selection --ids 1,2,3] [--batch-size 10]
 //   assemble --round <r>
 //   retry    --round 1
+//   jev      --tickets <file> [--eval-file <file>] [--rules <file>] [--schema <file>]
+//            [--mode all|remaining|selection --ids 1,2,3] [--concurrency 4] [--resume]
+//                         score a jev config in Node through Typesafe's API, no subagents. Needs
+//                         $TYPESAFE_API_KEY. --resume continues the last jev run of the same eval
+//                         file and criteria, re-sending only tickets with no saved response.
 //   status   [--eval-file <file>]
 //
 // Two directories, both under the user's working directory, and neither one configurable.
@@ -24,8 +39,12 @@
 //   round-<r>.json        which tickets went into which batch, for round <r>
 //   prompt-<r>-<i>.txt    the text handed to the subagent for batch <i>
 //   batch-<r>-<i>.json    the answer that subagent wrote back, before any checking
-// `plan` deletes all four kinds at the start of a run, so a run can never read the last one's
-// files by mistake. /qval:review keeps its own files here too and those are left alone.
+//   jev/<ticketId>.json   the raw Jev response for one ticket, written before it is read
+//   draft.json            a drafted config waiting for the user's approval (not part of a run)
+// `plan` and `jev` delete the per-run kinds at the start of a run (not run-context.json, which
+// they rewrite, and not draft.json), so a run can never read the last one's files by mistake.
+// `jev --resume` is the one exception, and it only resumes the run that wrote them. /qval:review
+// keeps its own files here too and those are left alone.
 //
 // qval-output/ holds the eval file, which is the point of the whole exercise. It is kept out of
 // .qval-run/ because that directory is safe to delete and this file is not.
@@ -49,19 +68,34 @@ import { basename, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { flagValue, parseArgs } from '../../lib/args.mjs'
-import { atomicWriteJson, readJson } from '../../lib/fsUtil.mjs'
-import { DEFAULT_SCHEMA, normalizeSchema, propertyErrors } from '../../lib/schema.mjs'
+import { atomicWriteJson, atomicWriteText, readJson } from '../../lib/fsUtil.mjs'
+import { draftWarnings, readDraft } from '../../lib/draft.mjs'
+import {
+  DEFAULT_SCHEMA,
+  DEFAULT_SCORER,
+  isScorer,
+  normalizeSchema,
+  parseSchemaFile,
+  schemaErrors,
+  SCORERS,
+  schemaFile
+} from '../../lib/schema.mjs'
 import { DEFAULT_RULES, normalizeRules } from '../../lib/rules.mjs'
 import { configFingerprint, datasetFingerprint } from '../../lib/fingerprint.mjs'
-import { defaultEvalPath, RUN_DIR, samePath } from '../../lib/paths.mjs'
+import { defaultEvalPath, evalSearchDirs, RUN_DIR, samePath } from '../../lib/paths.mjs'
 import { nowIso, pidAlive } from '../../lib/host.mjs'
 import { compilePrompt, SYSTEM_PROMPT } from '../../lib/promptCompiler.mjs'
 import { parseTicketsFile } from '../../lib/tickets.mjs'
 import { validateValues } from '../../lib/evalValidate.mjs'
 import { pluginVersion } from '../../lib/version.mjs'
+import { JEV_MODEL, readJev, toJev } from '../../lib/jev.mjs'
+import { apiKeyFromEnv, KEY_VARIABLE, postSystemOne, redactKey } from '../../lib/typesafe.mjs'
 import {
+  adoptConfig,
   applyLlmResults,
   CLAUDE_CODE_PROVIDER,
+  TYPESAFE_PROVIDER,
+  configLocked,
   createWorkingFile,
   isScoredResult,
   lockedLlmProvider,
@@ -78,11 +112,20 @@ const PROPERTY_TYPES = ['score', 'boolean', 'enum', 'text']
 const DEFAULT_RULES_FILE = 'EVAL_RULES.md'
 const DEFAULT_SCHEMA_FILE = 'EVAL_SCHEMA.json'
 const RUN_CONTEXT_FILE = 'run-context.json'
+/** Where the drafter writes its answer unless `--draft` says otherwise. */
+const DRAFT_FILE = 'draft.json'
 /** Written by `qval serve` in the same directory. Read (never written) to spot a live review. */
 const REVIEW_SESSION_FILE = 'review-session.json'
 /** Tickets per batch when `--batch-size` says otherwise. Bigger batches mean fewer subagents and
  *  less overhead, but a truncated response loses more tickets at once. */
 const DEFAULT_BATCH_SIZE = 10
+/** Under `.qval-run/`, one raw Jev response per ticket, `<ticketId>.json`. Per-run scratch. */
+const JEV_DIR = 'jev'
+/** Jev requests in flight at once when `--concurrency` says otherwise. Each request is one ticket
+ *  with every question, so a few in parallel keeps a large run moving without inviting 429s. */
+const DEFAULT_JEV_CONCURRENCY = 4
+/** How many distinct failures the `jev` summary spells out. The rest are counted, not listed. */
+const JEV_ERRORS_SHOWN = 3
 // What produced these scores is recorded on the evaluator as `CLAUDE_CODE_PROVIDER`, imported from
 // lib/evalFile.mjs rather than spelled again here. It gates PROVIDER_LOCKED below, so a second copy
 // that drifted would refuse a file this very skill wrote.
@@ -119,18 +162,23 @@ function chunk(items, size) {
 // ── config loading + validation ───────────────────────────────────────────────
 
 /**
- * Row-level validation for a hand-authored schema file. `propertyErrors` is the schema editor's
- * check and assumes the row already has a known type, so the type guard is added here. A row
- * typed `"rating"` passes `propertyErrors` but `normalizeSchema` silently drops it.
+ * Row-level validation for a hand-authored schema file, under its scorer. `schemaErrors` is the
+ * shared check and assumes every row is already an object of a known type, so those guards are
+ * added here. A row typed `"rating"` passes `schemaErrors` but `normalizeSchema` silently drops it.
+ * Returns one list per row, in row order.
  */
-function rowErrors(raw, otherKeys) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return ['Property must be a JSON object.']
-  const errors = []
-  if (!PROPERTY_TYPES.includes(raw.type)) errors.push(`Type must be one of: ${PROPERTY_TYPES.join(' | ')}.`)
-  // `propertyErrors` reads `.label`/`.key` as strings; a raw file may hold anything.
-  const row = { ...raw, label: String(raw.label ?? ''), key: String(raw.key ?? '') }
-  errors.push(...propertyErrors(row, otherKeys))
-  return errors
+function rowErrors(raw, scorer) {
+  const isRow = (r) => !!r && typeof r === 'object' && !Array.isArray(r)
+  // `schemaErrors` reads `.label`/`.key` as strings; a raw file may hold anything.
+  const rows = raw.map((r) =>
+    isRow(r) ? { ...r, label: String(r.label ?? ''), key: String(r.key ?? '') } : { key: '', label: '' }
+  )
+  const shared = schemaErrors(rows, scorer)
+  return raw.map((r, i) => {
+    if (!isRow(r)) return ['Property must be a JSON object.']
+    const typeError = PROPERTY_TYPES.includes(r.type) ? [] : [`Type must be one of: ${PROPERTY_TYPES.join(' | ')}.`]
+    return [...typeError, ...shared[i]]
+  })
 }
 
 /** Load rules + schema from disk, exiting with a specific reason when either is unusable. */
@@ -150,10 +198,19 @@ function loadConfig(args) {
   } catch (err) {
     fail(`BAD_JSON ${schemaPath}`, `  ${err.message}`)
   }
-  if (!Array.isArray(raw)) fail(`BAD_SCHEMA ${schemaPath}`, '  The schema file must be a JSON array of properties.')
-  if (raw.length === 0) fail(`SCHEMA_EMPTY ${schemaPath}`, '  Add at least one property to evaluate.')
+  const parsed = parseSchemaFile(raw)
+  if (!parsed) {
+    fail(
+      `BAD_SCHEMA ${schemaPath}`,
+      '  The schema file must be { "scorer": "claude" | "jev", "properties": [...] } (or a bare array, read as claude).'
+    )
+  }
+  if (!isScorer(parsed.scorer)) {
+    fail(`BAD_SCORER ${schemaPath}`, `  "scorer" must be one of: ${SCORERS.join(' | ')}. Got ${JSON.stringify(parsed.scorer)}.`)
+  }
+  if (parsed.properties.length === 0) fail(`SCHEMA_EMPTY ${schemaPath}`, '  Add at least one property to evaluate.')
 
-  return { rulesPath, schemaPath, rules, raw }
+  return { rulesPath, schemaPath, rules, scorer: parsed.scorer, raw: parsed.properties }
 }
 
 const typeLabel = (row) => `${row && typeof row === 'object' ? (row.type ?? '?') : '?'}${row?.multiple === true ? '[]' : ''}`
@@ -161,6 +218,9 @@ const typeLabel = (row) => `${row && typeof row === 'object' ? (row.type ?? '?')
 /** The right-hand column: the bounds of a score, the options of an enum. */
 function detailOf(row) {
   if (!row || typeof row !== 'object') return '-'
+  if (row.type === 'score' && Array.isArray(row.levels)) {
+    return `levels ${row.levels.map((l) => String(l?.label ?? '?').trim()).join(' | ')}`
+  }
   if (row.type === 'score') return `${row.min ?? '?'}..${row.max ?? '?'} step ${row.step ?? '?'}`
   if (row.type === 'enum') return Array.isArray(row.options) ? row.options.join(' | ') : '(no options)'
   return '-'
@@ -184,15 +244,13 @@ function printTable(raw) {
 }
 
 /**
- * Validate every row and report per-row problems. Exits non-zero on any error so the skill stops
- * rather than planning a run against a schema the model can't satisfy.
+ * Validate every row under the scorer and report per-row problems. Exits non-zero on any error so
+ * the skill stops rather than planning a run against a schema the scorer can't satisfy.
  */
-function checkRows(raw, schemaPath) {
-  const keys = raw.map((row) => String(row?.key ?? '').trim())
+function checkRows(raw, schemaPath, scorer) {
   const failures = []
-  raw.forEach((row, i) => {
-    const others = keys.filter((_, j) => j !== i).filter(Boolean)
-    for (const message of rowErrors(row, others)) failures.push({ index: i, row, message })
+  rowErrors(raw, scorer).forEach((messages, i) => {
+    for (const message of messages) failures.push({ index: i, row: raw[i], message })
   })
 
   if (failures.length > 0) {
@@ -210,7 +268,7 @@ function checkRows(raw, schemaPath) {
 
   // A valid row can still be dropped by the normalizer (they are independent passes), and a
   // silently shorter schema is exactly the drift that breaks fingerprint matching.
-  const schema = normalizeSchema(raw)
+  const schema = normalizeSchema(raw, scorer)
   if (schema.length !== raw.length) {
     fail(
       `SCHEMA_INVALID normalization dropped ${raw.length - schema.length} of ${raw.length} properties`,
@@ -223,15 +281,16 @@ function checkRows(raw, schemaPath) {
 // ── init ──────────────────────────────────────────────────────────────────────
 
 /**
- * The starter config, written from the same constants a browser-seeded session starts from.
+ * The starter config, written from the same constants the review session's settings default to.
  * They are one definition on purpose. Both copies are hashed into the config fingerprint, so two
  * users who each accepted the defaults would get files that refuse to merge if these ever drifted.
+ * Only `/qval:draft` runs `init`, and only when the user asks for the starter config.
  * @param {string} name
  * @returns {string}
  */
 function starterConfig(name) {
   return name === DEFAULT_SCHEMA_FILE
-    ? `${JSON.stringify(DEFAULT_SCHEMA, null, 2)}\n`
+    ? `${JSON.stringify(schemaFile(DEFAULT_SCORER, DEFAULT_SCHEMA), null, 2)}\n`
     : `${DEFAULT_RULES}\n`
 }
 
@@ -251,7 +310,7 @@ function cmdInit() {
     console.log('READY both config files are already present')
     return
   }
-  console.log(`NEXT edit the file(s) above, then run: node ${enginePath} config --check`)
+  console.log(`NEXT edit the starter file(s) above by hand or in /qval:review, then run: node ${enginePath} config`)
   // Non-zero on purpose: the starter config is a placeholder, not a config anybody meant to run.
   process.exit(EXIT.SCAFFOLDED)
 }
@@ -259,17 +318,23 @@ function cmdInit() {
 // ── config ────────────────────────────────────────────────────────────────────
 
 async function cmdConfig(args) {
-  const { rulesPath, schemaPath, rules, raw } = loadConfig(args)
+  const { rulesPath, schemaPath, rules, scorer, raw } = loadConfig(args)
 
+  console.log(`SCORER ${scorer}`)
   console.log(`RULES ${rulesPath} · ${rules.trim().length} chars`)
   console.log(`SCHEMA ${schemaPath} · ${raw.length} propert${raw.length === 1 ? 'y' : 'ies'}`)
   console.log('')
   printTable(raw)
 
-  const schema = checkRows(raw, schemaPath)
-  const fingerprint = configFingerprint(schema, rules)
+  const schema = checkRows(raw, schemaPath, scorer)
+  const fingerprint = configFingerprint(schema, rules, scorer)
 
-  if (args.preview) {
+  if (args.preview && scorer !== 'claude') {
+    // The compiled prompt is what Claude's subagents read. Jev is sent a different request, and
+    // printing the Claude prompt for a Jev config would show text that is never sent.
+    console.log('')
+    console.log(`PREVIEW_UNAVAILABLE there is no prompt preview for the ${scorer} scorer`)
+  } else if (args.preview) {
     const { staticPrefix } = compilePrompt({ rules, schema, tickets: [] })
     console.log('')
     console.log(`PREVIEW static prefix (rules + schema spec + output contract) · ${staticPrefix.length} chars`)
@@ -279,13 +344,15 @@ async function cmdConfig(args) {
   }
 
   if (args.write) {
-    const next = JSON.stringify(schema, null, 2)
+    // Always the wrapped form, so a bare array from before scorers existed gains its scorer here.
+    const wrapped = schemaFile(scorer, schema)
+    const next = JSON.stringify(wrapped, null, 2)
     const current = readFileSync(schemaPath, 'utf8')
     if (current.trim() === next.trim()) {
       console.log('')
       console.log(`UNCHANGED ${schemaPath} is already normalized`)
     } else {
-      await atomicWriteJson(schemaPath, schema)
+      await atomicWriteJson(schemaPath, wrapped)
       console.log('')
       console.log(`WROTE ${schemaPath} · ${schema.length} propert${schema.length === 1 ? 'y' : 'ies'}`)
     }
@@ -293,6 +360,142 @@ async function cmdConfig(args) {
 
   console.log('')
   console.log(`CONFIG OK · ${schema.length} propert${schema.length === 1 ? 'y' : 'ies'}`)
+  console.log(`FINGERPRINT ${fingerprint}`)
+}
+
+// ── draft-check / draft-apply ─────────────────────────────────────────────────
+
+/**
+ * Read the drafted config and validate it, exiting with every problem when it cannot be applied.
+ * Both commands go through here, so `draft-apply` re-checks a draft that may have been edited since
+ * it was checked rather than trusting that it passed once.
+ */
+async function loadDraft(args, expectedScorer) {
+  const draftPath = resolve(flagValue(args, 'draft') ?? join(RUN_DIR, DRAFT_FILE))
+  if (!existsSync(draftPath)) fail(`MISSING_DRAFT ${draftPath}`, '  Write the draft there first (the shape is in skills/draft/DRAFTING.md).')
+  const raw = await readJson(draftPath)
+  if (raw === null) fail(`BAD_JSON ${draftPath}`, '  The draft is not valid JSON.')
+
+  const read = readDraft(raw)
+  if (!read.ok) fail(`DRAFT_INVALID ${draftPath}`, ...read.problems.map((p) => `  ${p}`))
+  const { draft } = read
+  if (expectedScorer && draft.scorer !== expectedScorer) {
+    fail(
+      `SCORER_MISMATCH ${draftPath}`,
+      `  The draft is for ${draft.scorer}, but --scorer says ${expectedScorer}.`,
+      '  Redraft from RULES.md for the scorer the user chose.'
+    )
+  }
+
+  // The same per-row validation `config` runs, so a draft that passes here is a config
+  // that passes there. It exits with the per-row ERRORS block on any problem.
+  const schema = checkRows(draft.properties, draftPath, draft.scorer)
+  const rules = normalizeRules(draft.rules)
+  return { draftPath, draft, schema, rules, fingerprint: configFingerprint(schema, rules, draft.scorer) }
+}
+
+/**
+ * Eval files here that were scored under criteria other than these. Replacing the config never
+ * touches them, since each carries its own snapshot, and `plan` refuses to score the new criteria
+ * into one with `CONFIG_MISMATCH`. Listing them up front means the user hears it before approving
+ * rather than at the next run. A file with no scores yet is left off, because the next run or
+ * review session adopts the new config into it rather than refusing.
+ */
+async function evalFilesUnderOtherCriteria(fingerprint) {
+  const out = []
+  for (const dir of evalSearchDirs(process.cwd())) {
+    if (!existsSync(dir)) continue
+    for (const name of readdirSync(dir).filter((n) => n.endsWith('.qval.json')).sort()) {
+      const raw = await readJson(join(dir, name))
+      const file = raw ? normalizeEvalFile(raw) : null
+      if (file && file.meta.config.fingerprint !== fingerprint && configLocked(file)) out.push(join(dir, name))
+    }
+  }
+  return out
+}
+
+function printEvalFilesUnderOtherCriteria(paths) {
+  if (!paths.length) return
+  console.log('')
+  console.log(`OTHER_CRITERIA ${plural(paths.length, 'eval file was', 'eval files were')} scored under different rules or schema:`)
+  for (const p of paths) console.log(`  ${p}`)
+  console.log('  They are left as they are. Scoring this config needs a new eval file (plan --eval-file <new path>).')
+}
+
+async function cmdDraftCheck(args) {
+  const scorerFlag = flagValue(args, 'scorer')
+  if (!scorerFlag) usage('MISSING_SCORER', `  pass --scorer ${SCORERS.join('|')}: the scorer the user chose for this draft`)
+  if (!isScorer(scorerFlag)) usage(`BAD_SCORER --scorer ${scorerFlag}`, `  --scorer must be one of: ${SCORERS.join(' | ')}`)
+
+  const { draftPath, draft, schema, rules, fingerprint } = await loadDraft(args, scorerFlag)
+  const warnings = draftWarnings(draft.properties, draft.scorer)
+
+  console.log(`DRAFT_OK ${draftPath}`)
+  console.log(`SCORER ${draft.scorer} · ${plural(schema.length, 'property', 'properties')}`)
+  console.log(`RULES ${rules.trim().length} chars for EVAL_RULES.md`)
+  console.log('')
+  printTable(draft.properties)
+
+  const keys = Object.keys(draft.notes).filter((k) => schema.some((p) => p.key === k))
+  if (keys.length) {
+    console.log('')
+    console.log('NOTES')
+    for (const k of keys) console.log(`  ${k}: ${draft.notes[k]}`)
+  }
+
+  const all = [
+    ...warnings.map((w) => (w.key ? `${w.key}: ${w.message}` : w.message)),
+    ...(rules.trim() ? [] : ['The rules text is empty, so the scorer gets no context beyond the properties.']),
+    ...draft.warnings
+  ]
+  console.log('')
+  console.log(`WARNINGS ${all.length}`)
+  for (const w of all) console.log(`  ${w}`)
+
+  console.log('')
+  console.log(`REMOVED_FROM_RULES ${draft.removed.length}`)
+  for (const r of draft.removed) console.log(`  ${r}`)
+
+  printEvalFilesUnderOtherCriteria(await evalFilesUnderOtherCriteria(fingerprint))
+
+  console.log('')
+  console.log(`FINGERPRINT ${fingerprint}`)
+  console.log(`NEXT show the user the table, notes, warnings, and removals. On approval run: node ${enginePath} draft-apply`)
+}
+
+/**
+ * Stop if any review session in this directory is live. Not only one on a particular eval file, as
+ * `plan` checks: a session writes its own config back over EVAL_SCHEMA.json and EVAL_RULES.md when
+ * it ends, if the person changed it, which would quietly replace the draft just applied.
+ */
+async function refuseIfAnyReviewLive(outDir) {
+  const record = await readJson(join(outDir, REVIEW_SESSION_FILE))
+  if (record?.status !== 'live' || !pidAlive(record.pid)) return
+  fail(
+    `SESSION_LIVE ${record.workingPath ?? '(unknown eval file)'}`,
+    '  A review session (`/qval:review`) is open here, and it writes its own config back to',
+    '  EVAL_SCHEMA.json and EVAL_RULES.md when it ends. Ask the user to click FINISH in that tab, then re-run.',
+    `  URL ${record.url ?? '(unknown)'}`
+  )
+}
+
+async function cmdDraftApply(args) {
+  const { draft, schema, rules, fingerprint } = await loadDraft(args, null)
+  await refuseIfAnyReviewLive(resolve(RUN_DIR))
+
+  const schemaPath = resolve(DEFAULT_SCHEMA_FILE)
+  const rulesPath = resolve(DEFAULT_RULES_FILE)
+  const verb = (p) => (existsSync(p) ? 'REPLACED' : 'CREATED')
+  const schemaVerb = verb(schemaPath)
+  const rulesVerb = verb(rulesPath)
+  await atomicWriteJson(schemaPath, schemaFile(draft.scorer, schema))
+  await atomicWriteText(rulesPath, rules.endsWith('\n') ? rules : `${rules}\n`)
+
+  console.log(`APPLIED scorer ${draft.scorer} · ${plural(schema.length, 'property', 'properties')}`)
+  console.log(`${schemaVerb} ${schemaPath}`)
+  console.log(`${rulesVerb} ${rulesPath}`)
+  printEvalFilesUnderOtherCriteria(await evalFilesUnderOtherCriteria(fingerprint))
+  console.log('')
   console.log(`FINGERPRINT ${fingerprint}`)
 }
 
@@ -377,7 +580,7 @@ async function loadContext() {
  * schema its prompts never described. `Workspace.adoptExternalWrite` guards the other direction
  * with the same comparison.
  */
-async function loadRunEvalFile(ctx) {
+async function loadRunEvalFile(ctx, restart = '`plan`') {
   const raw = await readJson(ctx.evalFilePath)
   const file = raw ? normalizeEvalFile(raw) : null
   if (!file) fail(`BAD_EVAL_FILE ${ctx.evalFilePath}`, '  Missing, or not a valid .qval.json eval file.')
@@ -385,14 +588,14 @@ async function loadRunEvalFile(ctx) {
     fail(
       `FILE_REPLACED ${ctx.evalFilePath}`,
       '  It is an evaluation of different tickets than the one this run planned.',
-      '  Re-run `plan`. Writing now would mix two datasets into one file.'
+      `  Re-run ${restart}. Writing now would mix two datasets into one file.`
     )
   }
   if (file.meta.config.fingerprint !== ctx.configFingerprint) {
     fail(
       `FILE_REPLACED ${ctx.evalFilePath}`,
       '  Its scoring criteria changed since this run was planned (a review session can re-stamp them).',
-      '  Re-run `plan`. These answers were written against the old schema and rules.'
+      `  Re-run ${restart}. These answers were written against the old schema and rules.`
     )
   }
   return file
@@ -401,8 +604,9 @@ async function loadRunEvalFile(ctx) {
 // ── rounds ────────────────────────────────────────────────────────────────────
 
 /**
- * The three kinds of file one evaluation run creates: the prompt sent to each subagent, the answer
- * each subagent writes back, and the list of which tickets went into which batch.
+ * The three kinds of file one Claude run creates: the prompt sent to each subagent, the answer
+ * each subagent writes back, and the list of which tickets went into which batch. A Jev run's
+ * responses go in `JEV_DIR` instead, which is per-run too.
  *
  * These names are matched exactly rather than by a wildcard, because `/qval:review` keeps its own
  * files in the same directory (`settings.json` and `review-session.json`). Deleting those would
@@ -430,6 +634,9 @@ function clearRunScratch(outDir) {
   for (const name of readdirSync(outDir)) {
     if (RUN_SCRATCH_RE.test(name)) rmSync(join(outDir, name), { force: true })
   }
+  // The same hazard by ticket id rather than batch number: a response left from an earlier Jev run
+  // would be read by `jev --resume` as this run's answer for that ticket.
+  rmSync(join(outDir, JEV_DIR), { recursive: true, force: true })
 }
 
 /**
@@ -496,13 +703,27 @@ function selectTargets(args, tickets, file, ticketsPath) {
   return { mode, targets: tickets }
 }
 
-async function cmdPlan(args) {
-  // Everything up to the first write is validation: a refusal must leave the working directory
-  // exactly as it found it, with no half-created eval file and no stale round manifest.
-  const { model, from } = resolveModel(args)
-
-  const { rulesPath, schemaPath, rules, raw } = loadConfig(args)
-  const schema = checkRows(raw, schemaPath)
+/**
+ * Every check a run makes before it writes anything, shared by `plan` (Claude) and `jev` so the two
+ * scorers are held to the same guards: the config valid for its scorer and owned by this command,
+ * the tickets readable, no live review on the eval file, and an existing eval file of the same
+ * dataset, the same config, and the same provider and model. Exits on the first failure, having
+ * written nothing.
+ * @param {Record<string, unknown>} args
+ * @param {{ command: string, scorer: string, provider: string, model: string, from: string, modelHint: string }} run
+ */
+async function checkRunInputs(args, run) {
+  const { rulesPath, schemaPath, rules, scorer, raw } = loadConfig(args)
+  const schema = checkRows(raw, schemaPath, scorer)
+  if (scorer !== run.scorer) {
+    // A file is only ever scored by the scorer its config names, so each command refuses the
+    // other's config rather than scoring it the wrong way.
+    fail(
+      `WRONG_SCORER ${schemaPath}`,
+      `  This config is scored by ${scorer}, and \`${run.command}\` only runs the ${run.scorer} scorer.`,
+      `  The ${scorer} scorer runs with \`${scorer === 'jev' ? 'jev' : 'plan'}\`.`
+    )
+  }
 
   const ticketsFlag = flagValue(args, 'tickets')
   if (!ticketsFlag) usage('MISSING_TICKETS', '  pass --tickets <path to tickets.json>')
@@ -510,7 +731,7 @@ async function cmdPlan(args) {
   const { tickets, source } = await loadTickets(ticketsPath)
 
   const datasetFp = datasetFingerprint(tickets)
-  const configFp = configFingerprint(schema, rules)
+  const configFp = configFingerprint(schema, rules, scorer)
 
   const evalFileFlag = flagValue(args, 'eval-file')
   const evalFilePath = evalFileFlag ? resolve(evalFileFlag) : defaultEvalPath(process.cwd(), ticketsPath)
@@ -519,6 +740,7 @@ async function cmdPlan(args) {
   await refuseIfReviewLive(outDir, evalFilePath)
 
   let file = null
+  let adopted = false
   if (existsSync(evalFilePath)) {
     const rawFile = await readJson(evalFilePath)
     file = rawFile ? normalizeEvalFile(rawFile) : null
@@ -532,7 +754,15 @@ async function cmdPlan(args) {
         `  TICKETS ${ticketsPath}`
       )
     }
-    if (file.meta.config.fingerprint !== configFp) {
+    if (file.meta.config.fingerprint !== configFp && !configLocked(file)) {
+      // Nothing in the file was scored under its old criteria, so the lock has not engaged and
+      // there is nothing for the new criteria to contradict. Refusing here would leave an empty
+      // file from an early mistake blocking every run. The restamp is only held in memory: the
+      // caller writes it once its own checks have passed (`persistAdoptedConfig`), so a refusal
+      // still leaves the file as it was.
+      file = adoptConfig(file, { fingerprint: configFp, scorer, schema, rules }, nowIso())
+      adopted = true
+    } else if (file.meta.config.fingerprint !== configFp) {
       fail(
         `CONFIG_MISMATCH ${evalFilePath}`,
         '  Different rules or schema. This eval file used different scoring criteria.',
@@ -544,21 +774,77 @@ async function cmdPlan(args) {
     // One model scores every ticket in a file, and it fires on the same signal the
     // config lock does: a scored `llm` evaluator.
     const locked = lockedLlmProvider(file)
-    if (locked && locked.provider !== CLAUDE_CODE_PROVIDER) {
+    if (locked && locked.provider !== run.provider) {
       fail(
         `PROVIDER_LOCKED ${evalFilePath}`,
-        `  Already scored by ${locked.provider ?? '(unknown)'} · ${locked.model ?? '(unknown)'}, not this skill.`,
-        '  A desktop release wrote it. Start a new eval file with --eval-file <new path> to score it here.'
+        `  Already scored by ${locked.provider ?? '(unknown)'} · ${locked.model ?? '(unknown)'}, not ${run.provider}.`,
+        '  One provider scores every ticket in a file. Start a new eval file with --eval-file <new path> to score it here.'
       )
     }
-    if (locked && locked.model !== model) {
+    if (locked && locked.model !== run.model) {
       fail(
         `MODEL_LOCKED ${evalFilePath}`,
-        `  Already scored with ${locked.model ?? '(unknown)'}, but this run would record ${model} (from ${from}).`,
-        `  Re-run with --model "${locked.model ?? ''}", or start a new eval file with --eval-file <new path>.`
+        `  Already scored with ${locked.model ?? '(unknown)'}, but this run would record ${run.model} (from ${run.from}).`,
+        run.modelHint.replace('<locked>', locked.model ?? '')
       )
     }
   }
+
+  return {
+    rulesPath,
+    schemaPath,
+    rules,
+    scorer,
+    schema,
+    ticketsPath,
+    tickets,
+    source,
+    datasetFp,
+    configFp,
+    evalFilePath,
+    outDir,
+    file,
+    adopted
+  }
+}
+
+/**
+ * Write the restamp `checkRunInputs` made in memory, once the run is definitely going ahead. It has
+ * to reach disk before any results do: `assemble` validates batch files against the file's own
+ * schema, and `loadRunEvalFile` refuses a file whose config fingerprint differs from the run's.
+ * @param {{ adopted: boolean, file: object | null, evalFilePath: string }} inputs
+ */
+async function persistAdoptedConfig(inputs) {
+  if (!inputs.adopted || !inputs.file) return
+  await atomicWriteJson(inputs.evalFilePath, inputs.file)
+}
+
+/**
+ * Printed after the command's own first line rather than before it, because the first stdout token
+ * is the success signal `SKILL.md` branches on.
+ * @param {{ adopted: boolean, evalFilePath: string }} inputs
+ */
+function printAdoptedConfig(inputs) {
+  if (!inputs.adopted) return
+  console.log(`CONFIG_ADOPTED ${inputs.evalFilePath}`)
+  console.log('  It had no scores yet, so it now uses the current rules and schema.')
+}
+
+async function cmdPlan(args) {
+  // Everything up to the first write is validation: a refusal must leave the working directory
+  // exactly as it found it, with no half-created eval file and no stale round manifest.
+  const { model, from } = resolveModel(args)
+  const inputs = await checkRunInputs(args, {
+    command: 'plan',
+    scorer: 'claude',
+    provider: CLAUDE_CODE_PROVIDER,
+    model,
+    from,
+    modelHint: '  Re-run with --model "<locked>", or start a new eval file with --eval-file <new path>.'
+  })
+  const { rulesPath, schemaPath, rules, scorer, schema, ticketsPath, tickets, source, datasetFp, configFp, evalFilePath, outDir } =
+    inputs
+  let file = inputs.file
 
   const { mode, targets } = selectTargets(args, tickets, file, ticketsPath)
 
@@ -576,13 +862,14 @@ async function cmdPlan(args) {
   // Every check above has passed, so this run is definitely going ahead. The previous run's files
   // are now out of date, and leaving them would let this run read them by mistake (see below).
   clearRunScratch(outDir)
+  await persistAdoptedConfig(inputs)
 
   if (!file) {
     file = createWorkingFile({
       appVersion: await pluginVersion(),
       now: nowIso(),
       dataset: { fingerprint: datasetFp, ticketCount: tickets.length, source },
-      config: { fingerprint: configFp, schema, rules }
+      config: { fingerprint: configFp, scorer, schema, rules }
     })
     await atomicWriteJson(evalFilePath, file)
   }
@@ -612,6 +899,7 @@ async function cmdPlan(args) {
   console.log(
     `PLANNED ${plural(targets.length, 'ticket', 'tickets')} · model=${model} (${from}) · mode=${mode} · batchSize=${batchSize}`
   )
+  printAdoptedConfig(inputs)
   console.log(`EVAL_FILE ${evalFilePath}`)
   console.log(`OUT ${outDir}`)
   printRound(manifest)
@@ -788,6 +1076,199 @@ async function cmdRetry(args) {
   printRound(manifest)
 }
 
+// ── jev ───────────────────────────────────────────────────────────────────────
+
+/** Run `fn` over `items` with at most `limit` in flight. Order of completion is not preserved, so
+ *  `fn` gets the index to put its result in place. */
+async function mapBounded(items, limit, fn) {
+  let next = 0
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++
+      await fn(items[i], i)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+}
+
+/**
+ * `jev --resume` picks up a run's cached responses, so it is only allowed onto the run that wrote
+ * them: the same eval file, the same tickets, the same criteria. Anything else would score this
+ * evaluation with answers to different questions.
+ */
+async function resumeContext(outDir, inputs) {
+  const prev = await readJson(join(outDir, RUN_CONTEXT_FILE))
+  const same =
+    !!prev &&
+    prev.provider === TYPESAFE_PROVIDER &&
+    samePath(prev.evalFilePath, inputs.evalFilePath) &&
+    prev.datasetFingerprint === inputs.datasetFp &&
+    prev.configFingerprint === inputs.configFp &&
+    Array.isArray(prev.targetIds)
+  if (!same || !inputs.file) {
+    fail(
+      `RESUME_MISMATCH ${inputs.evalFilePath}`,
+      '  The last run here was not a Jev run of this eval file, these tickets, and these criteria,',
+      '  so its saved responses cannot be used. Run `jev` without --resume to start over.'
+    )
+  }
+  return prev
+}
+
+async function cmdJev(args) {
+  // Everything up to `clearRunScratch` is validation, exactly as in `plan`: a refusal leaves the
+  // directory as it found it, including any responses a `--resume` would need.
+  const resume = args.resume === true
+  const concurrencyFlag = flagValue(args, 'concurrency')
+  const concurrency = concurrencyFlag === null ? DEFAULT_JEV_CONCURRENCY : Math.floor(Number(concurrencyFlag))
+  if (!Number.isFinite(concurrency) || concurrency < 1) usage(`BAD_CONCURRENCY ${concurrencyFlag}`, '  --concurrency must be >= 1')
+
+  const inputs = await checkRunInputs(args, {
+    command: 'jev',
+    scorer: 'jev',
+    provider: TYPESAFE_PROVIDER,
+    model: JEV_MODEL,
+    from: 'the jev scorer',
+    modelHint: '  The Jev model is fixed, so score this config into a new eval file with --eval-file <new path>.'
+  })
+  const { rulesPath, schemaPath, rules, scorer, schema, ticketsPath, tickets, source, datasetFp, configFp, evalFilePath, outDir } =
+    inputs
+
+  // Named, never shown. The key reaches this process through the user's shell profile and nothing
+  // else, and no output of this command ever carries it.
+  const key = apiKeyFromEnv()
+  if (!key) {
+    fail(
+      `MISSING_KEY ${KEY_VARIABLE}`,
+      `  Set ${KEY_VARIABLE} in your shell profile (export ${KEY_VARIABLE}=...) and start a new shell.`
+    )
+  }
+
+  let ctx
+  let targets
+  if (resume) {
+    ctx = await resumeContext(outDir, inputs)
+    // Normally a no-op, since the run being resumed already restamped the file. It matters only if
+    // the file was put back under its old config since, and `loadRunEvalFile` would refuse that.
+    await persistAdoptedConfig(inputs)
+    const wanted = new Set(ctx.targetIds)
+    targets = tickets.filter((t) => wanted.has(t.id))
+  } else {
+    const selected = selectTargets(args, tickets, inputs.file, ticketsPath)
+    targets = selected.targets
+    if (targets.length === 0) {
+      console.log(`NOTHING_TO_DO mode=${selected.mode} · no tickets need evaluation`)
+      console.log(`EVAL_FILE ${evalFilePath}`)
+      return
+    }
+    mkdirSync(outDir, { recursive: true })
+    clearRunScratch(outDir)
+    await persistAdoptedConfig(inputs)
+    if (!inputs.file) {
+      const file = createWorkingFile({
+        appVersion: await pluginVersion(),
+        now: nowIso(),
+        dataset: { fingerprint: datasetFp, ticketCount: tickets.length, source },
+        config: { fingerprint: configFp, scorer, schema, rules }
+      })
+      await atomicWriteJson(evalFilePath, file)
+    }
+    ctx = {
+      version: 1,
+      plannedAt: nowIso(),
+      ticketsPath,
+      evalFilePath,
+      rulesPath,
+      schemaPath,
+      outDir,
+      provider: TYPESAFE_PROVIDER,
+      model: JEV_MODEL,
+      modelFrom: 'the jev scorer',
+      mode: selected.mode,
+      concurrency,
+      datasetFingerprint: datasetFp,
+      configFingerprint: configFp,
+      targetIds: targets.map((t) => t.id),
+      round: 0,
+      assembled: []
+    }
+    writeJsonSync(join(outDir, RUN_CONTEXT_FILE), ctx)
+  }
+
+  const jevDir = join(outDir, JEV_DIR)
+  mkdirSync(jevDir, { recursive: true })
+
+  /** @type {Array<object | undefined>} one slot per target; a slot left empty was never sent */
+  const results = new Array(targets.length)
+  let sent = 0
+  let cached = 0
+  /** Set on a 401 or 403. Every later request would get the same answer, so none is sent. */
+  let rejected = null
+
+  await mapBounded(targets, concurrency, async (ticket, i) => {
+    const cachePath = join(jevDir, `${ticket.id}.json`)
+    let body = resume ? await readJson(cachePath) : null
+    if (body !== null) {
+      cached++
+    } else {
+      if (rejected) return
+      try {
+        const response = await postSystemOne(toJev({ rules, schema, ticket }), { key })
+        sent++
+        // Written before it is read, so a run that dies mid-way keeps every answer it paid for,
+        // and `--resume` reads exactly what this run would have.
+        await atomicWriteJson(cachePath, response)
+        body = await readJson(cachePath)
+      } catch (err) {
+        const status = typeof err?.status === 'number' ? err.status : 0
+        // TypesafeError messages are redacted already. Anything else is redacted here, since it
+        // is printed and stored.
+        const message = redactKey(err instanceof Error ? err.message : String(err), key)
+        if (status === 401 || status === 403) rejected = rejected ?? message
+        results[i] = { ticketId: ticket.id, values: {}, evaluatedAt: nowIso(), error: message }
+        return
+      }
+    }
+    results[i] = readJev(body, schema, { ticketId: ticket.id, evaluatedAt: nowIso() })
+  })
+
+  // Checked again at the end, since a review session can open on this file during a long run.
+  // The responses are cached, so `--resume` after FINISH re-sends nothing.
+  await refuseIfReviewLive(outDir, evalFilePath)
+  const file = await loadRunEvalFile(ctx, '`jev` without --resume')
+  const done = results.filter(Boolean)
+  const next = applyLlmResults(file, { results: done, provider: TYPESAFE_PROVIDER, model: JEV_MODEL })
+  await atomicWriteJson(evalFilePath, { ...next, meta: { ...next.meta, updatedAt: nowIso() } })
+
+  const evaluated = done.filter(isScoredResult).length
+  const dropped = done.reduce((n, r) => n + (r.issues ?? []).filter((x) => x.action === 'dropped').length, 0)
+  const failures = done.filter((r) => r.error)
+  const unsent = targets.length - done.length
+  const reported = [...new Set(done.map((r) => r.reportedModel).filter(Boolean))]
+
+  console.log(`JEV_DONE ${plural(targets.length, 'ticket', 'tickets')} · model=${JEV_MODEL} · mode=${ctx.mode}${resume ? ' · resumed' : ''}`)
+  printAdoptedConfig(inputs)
+  console.log(`SENT ${sent}`)
+  console.log(`CACHED ${cached}`)
+  console.log(`EVALUATED ${evaluated}`)
+  console.log(`DROPPED ${dropped}`)
+  console.log(`FAILED ${failures.length}`)
+  const distinct = [...new Map(failures.map((r) => [r.error, r])).values()]
+  for (const r of distinct.slice(0, JEV_ERRORS_SHOWN)) console.log(`  #${r.ticketId} ${r.error}`)
+  if (distinct.length > JEV_ERRORS_SHOWN) console.log(`  (${distinct.length - JEV_ERRORS_SHOWN} more distinct errors)`)
+  if (unsent) console.log(`UNSENT ${unsent}`)
+  if (reported.length) console.log(`REPORTED_MODEL ${reported.join(', ')}`)
+  console.log(`EVAL_FILE ${evalFilePath}`)
+
+  if (rejected) {
+    fail(
+      `KEY_REJECTED ${KEY_VARIABLE}`,
+      `  Typesafe refused the key, so the remaining ${plural(unsent, 'ticket was', 'tickets were')} not sent.`,
+      `  ${rejected}`
+    )
+  }
+}
+
 // ── status ────────────────────────────────────────────────────────────────────
 
 async function cmdStatus(args) {
@@ -823,6 +1304,12 @@ switch (cmd) {
   case 'config':
     await cmdConfig(args)
     break
+  case 'draft-check':
+    await cmdDraftCheck(args)
+    break
+  case 'draft-apply':
+    await cmdDraftApply(args)
+    break
   case 'plan':
     await cmdPlan(args)
     break
@@ -832,12 +1319,15 @@ switch (cmd) {
   case 'retry':
     await cmdRetry(args)
     break
+  case 'jev':
+    await cmdJev(args)
+    break
   case 'status':
     await cmdStatus(args)
     break
   default:
     console.error(
-      `Usage: node ${basename(enginePath)} <init|config|plan|assemble|retry|status> [options]  (see the file header)`
+      `Usage: node ${basename(enginePath)} <init|config|draft-check|draft-apply|plan|assemble|retry|jev|status> [options]  (see the file header)`
     )
     process.exit(EXIT.USAGE)
 }
