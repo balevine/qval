@@ -2,7 +2,7 @@
  * The two typefaces the design depends on, self-hosted.
  *
  * `tailwind.config.cjs` has named Inter and IBM Plex Mono since the first commit, but nothing ever
- * bundled them — they were resolving off our own machines. In a stranger's browser they aren't
+ * bundled them. They were resolving off our own machines. In a stranger's browser they aren't
  * installed and the whole app quietly falls back to system-ui and Menlo. So we declare them here
  * against the woff2 files in `@fontsource/*`, and the single-file build inlines them as data URIs.
  *

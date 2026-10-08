@@ -42,7 +42,7 @@ describe('SettingsStore', () => {
 
   it('serializes concurrent updates so no field is clobbered', async () => {
     const store = new SettingsStore(dir)
-    // Fired concurrently against different fields — an unserialized read-merge-write would drop
+    // Fired concurrently against different fields. An unserialized read-merge-write would drop
     // whichever writes land out of order.
     await Promise.all([
       store.set({ rules: 'be kind' }),

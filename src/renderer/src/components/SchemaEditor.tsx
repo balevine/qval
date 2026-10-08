@@ -158,7 +158,7 @@ export function SchemaEditor() {
       {locked ? (
         <LockNotice>
           Schema is locked. This file already has evaluations, so its scoring criteria are frozen to keep every
-          score comparable. Scoring the same tickets under a different schema means a new eval file: run{' '}
+          score comparable. Scoring the same tickets under a different schema means a new eval file. Run{' '}
           <span className="font-mono">/qval:evaluate-tickets</span> with{' '}
           <span className="font-mono">--eval-file &lt;new path&gt;</span>.
         </LockNotice>

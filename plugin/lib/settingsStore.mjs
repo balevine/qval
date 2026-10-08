@@ -19,7 +19,7 @@ export class SettingsStore {
     this.file = join(dir, 'settings.json')
     /** @type {Settings | null} */
     this.cache = null
-    /** Tail of the write queue — serializes `set()` so concurrent updates apply in call order. */
+    /** Tail of the write queue. Serializes `set()` so concurrent updates apply in call order. */
     this.queue = Promise.resolve()
   }
 
@@ -34,7 +34,7 @@ export class SettingsStore {
   /**
    * Persist a partial update. Writes are **serialized**: each set waits for the previous one to
    * finish (cache updated + file written) before it reads-merges-writes, so rapid-fire updates
-   * (e.g. per-keystroke edits) can't interleave and clobber each other — the last call wins, and
+   * (e.g. per-keystroke edits) can't interleave and clobber each other. The last call wins, and
    * updates to different fields all survive.
    * @param {Partial<Settings>} partial
    * @returns {Promise<Settings>}

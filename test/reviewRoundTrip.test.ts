@@ -114,7 +114,7 @@ function runSkill(home: string): string {
 /**
  * A listening review server bound to `home`, plus the renderer's own `apiClient` pointed at it.
  * The client is the real one out of `src/renderer`; only the two things a browser supplies for free
- * are injected — the token (which normally comes off the page URL) and `Sec-Fetch-Site`, which node's
+ * are injected. The token (which normally comes off the page URL) and `Sec-Fetch-Site`, which node's
  * `fetch` does not send and the server refuses mutations without.
  */
 async function startReview(home: string, options: { uiFile?: string; compare?: string } = {}) {
@@ -183,7 +183,7 @@ describe('skill file + browser file', () => {
     expect(humanFile.meta.dataset.fingerprint).toBe(llmFile.meta.dataset.fingerprint)
     expect(humanFile.meta.config.fingerprint).toBe(llmFile.meta.config.fingerprint)
 
-    // Which is exactly what MERGE gates on — through the client, by candidate id, no path on the wire.
+    // Which is exactly what MERGE gates on. Through the client, by candidate id, no path on the wire.
     const snapshot = await api.session.mergeComparison('c1')
     expect(snapshot!.comparisons).toHaveLength(1)
     expect(snapshot!.candidates).toEqual([{ id: 'c1', name: 'tickets.qval.json', merged: true }])

@@ -37,7 +37,7 @@ export function RulesEditor() {
       {locked ? (
         <LockNotice>
           Rules are locked. This file already has evaluations, so its scoring guidance is frozen. Scoring the
-          same tickets under different rules means a new eval file: run{' '}
+          same tickets under different rules means a new eval file. Run{' '}
           <span className="font-mono">/qval:evaluate-tickets</span> with{' '}
           <span className="font-mono">--eval-file &lt;new path&gt;</span>.{jev ? null : ' (You can still preview.)'}
         </LockNotice>

@@ -122,7 +122,7 @@ export interface EvalIssue {
   original?: unknown
 }
 
-/** One evaluator's scores for one ticket. `results` is sparse. Only scored tickets appear. */
+/** One evaluator's scores for one ticket. `results` is sparse, so only scored tickets appear. */
 export interface EvalResult {
   ticketId: number
   values: EvalValues
@@ -150,7 +150,7 @@ export interface Evaluator {
   results: EvalResult[]
 }
 
-/** The dataset an eval file references (by fingerprint. Tickets are not embedded.). */
+/** The dataset an eval file references (by fingerprint, since tickets are not embedded). */
 export interface DatasetRef {
   fingerprint: string
   ticketCount: number

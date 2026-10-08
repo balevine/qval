@@ -304,7 +304,7 @@ async function currentConfigFingerprint(settings) {
  *
  * **Only when they changed it.** These are files in the user's working directory that they may well
  * have written by hand, and a session opened on an older eval file loads *that file's* config into
- * settings, so writing unconditionally would stamp an archived schema over the current one just for
+ * settings. Writing unconditionally would stamp an archived schema over the current one just for
  * looking at an old result. Comparing fingerprints keeps the write to the case it exists for.
  */
 async function writeConfigForEngine(settings, dir, seededFingerprint) {

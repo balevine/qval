@@ -116,7 +116,7 @@ describe('explicit-path file operations', () => {
     await ws.open(ticketsPath)
     const out = join(home, 'run.qval.json')
 
-    expect(await ws.save()).toBeNull() // nowhere to write yet, so the caller owns Save-As
+    expect(await ws.save()).toBeNull() // nowhere to write yet. The caller owns Save-As
     expect(await ws.save(out)).toBe(out)
     expect(ws.currentPath()).toBe(out)
     expect(await ws.save()).toBe(out) // now bound

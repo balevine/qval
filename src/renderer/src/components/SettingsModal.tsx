@@ -32,18 +32,18 @@ interface Tab {
 const SCHEMA_HELP = (
   <ul className="space-y-1.5">
     <li>
-      <span className="font-mono font-bold text-ink">Label</span>: the display name people see (e.g. “Empathy”).
+      <span className="font-mono font-bold text-ink">Label</span>. The display name people see (e.g. “Empathy”).
     </li>
     <li>
-      <span className="font-mono font-bold text-ink">Key</span>: the stable id used in the saved JSON and the LLM
-      prompt (auto-filled from the label; must be unique).
+      <span className="font-mono font-bold text-ink">Key</span>. The stable id used in the saved JSON and the LLM
+      prompt (auto-filled from the label, and it must be unique).
     </li>
     <li>
-      <span className="font-mono font-bold text-ink">Type</span>: the value kind: score (number range), boolean,
+      <span className="font-mono font-bold text-ink">Type</span>. The value kind: score (number range), boolean,
       enum (pick one), or text. “Allow multiple” makes it an array (multi-select).
     </li>
     <li>
-      <span className="font-mono font-bold text-ink">Description</span>: guidance shown to the human evaluator{' '}
+      <span className="font-mono font-bold text-ink">Description</span>. Guidance shown to the human evaluator{' '}
       <em>and</em> injected into the LLM prompt.
     </li>
     <li>

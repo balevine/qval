@@ -25,7 +25,7 @@ export function StorageSettings() {
           onChange={(e) => update({ evaluatorName: e.target.value })}
         />
         <p className="text-[11px] text-ink/50">
-          Stamped on your human evaluations — shown as your column when eval files are merged.
+          Stamped on your human evaluations. It becomes your column when eval files are merged.
         </p>
       </div>
 
@@ -36,7 +36,7 @@ export function StorageSettings() {
         </div>
         <p className="text-[11px] text-ink/50">
           Bound by <span className="font-mono">/qval:review</span> when it started. Every edit is written to it
-          as you make it — there is nothing to save.
+          as you make it. There is nothing to save.
         </p>
       </div>
     </div>

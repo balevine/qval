@@ -34,7 +34,7 @@ export const DEFAULT_UI_FILE = join(HERE, '..', 'ui', 'index.html')
 export const TOKEN_PARAM = 't'
 export const TOKEN_HEADER = 'x-qval-token'
 
-/** Reject bodies bigger than this outright — every real request here is a few KB. */
+/** Reject bodies bigger than this outright. Every real request here is a few KB. */
 const MAX_BODY_BYTES = 1024 * 1024
 
 /** Grace period after the last SSE client drops before we call the session abandoned. Long enough
@@ -49,7 +49,7 @@ const SSE_KEEPALIVE_MS = 15_000
  *
  * `script-src` is filled in per response by `contentSecurityPolicy`. The bundle is a single file
  * with its JS inlined, and `'self'` does not cover an inline `<script>`, so the alternative to
- * hashing what we are about to serve would be `'unsafe-inline'` — which is the one directive worth
+ * hashing what we are about to serve would be `'unsafe-inline'`, which is the one directive worth
  * not giving up. The fonts and the icons are inlined as data URIs, hence `data:` on img/font.
  */
 const CSP_DIRECTIVES = [
@@ -153,7 +153,7 @@ function readJsonBody(req) {
     req.on('data', (chunk) => {
       size += chunk.length
       // Past the cap, keep draining but stop accumulating: the sender gets a clean 413 instead of a
-      // severed socket. Nothing unauthenticated reaches here — the token is checked before we read.
+      // severed socket. Nothing unauthenticated reaches here. The token is checked before we read.
       if (size > MAX_BODY_BYTES) {
         tooLarge = true
         chunks.length = 0
@@ -176,7 +176,7 @@ function readJsonBody(req) {
 }
 
 /**
- * Build the review server. It owns no paths of its own — `workspace` arrives already bound to the
+ * Build the review server. It owns no paths of its own. `workspace` arrives already bound to the
  * dataset and the working file, and `settings` to a directory.
  *
  * @param {object} options
@@ -197,7 +197,7 @@ export function createReviewServer({
 }) {
   /** @type {Set<import('node:http').ServerResponse>} */
   const clients = new Set()
-  /** True once a browser has connected at least once — before that there is no lease to lose. */
+  /** True once a browser has connected at least once. Before that there is no lease to lose. */
   let leaseHeld = false
   /** @type {NodeJS.Timeout | null} */
   let graceTimer = null

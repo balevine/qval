@@ -14,7 +14,7 @@ import { existsSync, realpathSync } from 'node:fs'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 
 /** Durable artifacts: the `*.qval.json` eval files and the `*.report.json` exports. Named after
- *  Qbort's `qbort-output/`, and for the same reason — generated files belong somewhere, not loose
+ *  Qbort's `qbort-output/`, and for the same reason. Generated files belong somewhere, not loose
  *  in the directory the user keeps their own files in. Gitignored like any other generated output,
  *  but **not** safe to delete: a human evaluation lives here and has no other copy. */
 export const OUTPUT_DIR = 'qval-output'

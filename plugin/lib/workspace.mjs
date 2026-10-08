@@ -24,7 +24,7 @@ import { atomicWriteJson, readJson } from './fsUtil.mjs'
  * already know. The caller decides how to ask (a cwd scan, under the CLI). Resolves to a path, to a
  * list of candidates to try in order, or to null when there's no answer.
  *
- * A list is safe because the fingerprint, not the caller, decides which one it is. So a host that
+ * A list is safe because the fingerprint, not the caller, decides which one it is. A host that
  * cannot narrow the directory down to one file should hand over all of them rather than give up.
  * @typedef {() => Promise<string | string[] | null>} DatasetLocator
  */
