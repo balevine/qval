@@ -4,7 +4,7 @@
 // **No endpoint accepts a path.** Both file paths (the tickets.json and the *.qval.json) are
 // resolved by the CLI from argv and cwd before the browser exists, so there is no path-traversal
 // surface to defend. Everything else here is ordinary localhost hygiene: bind 127.0.0.1, require a
-// per-session token, allowlist the Host header (that is the DNS-rebinding defense specifically),
+// per-session token on every API route, allowlist the Host header (that is the DNS-rebinding defense specifically),
 // require `Sec-Fetch-Site: same-origin` on mutations, and emit no CORS headers at all.
 
 import { createServer } from 'node:http'
@@ -412,6 +412,13 @@ export function createReviewServer({
     }
 
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
+    const path = url.pathname
+
+    // The page itself is the committed public bundle and carries no session data, so it needs no
+    // token. It must not: the client strips the token from the address bar and keeps it in
+    // sessionStorage, so a reload asks for `/` without one. Every API route below stays gated.
+    if (method === 'GET' && (path === '/' || path === '/index.html')) return serveUi(res)
+
     const presented = req.headers[TOKEN_HEADER] ?? url.searchParams.get(TOKEN_PARAM)
     if (!tokenMatches(presented, token)) {
       return sendError(res, 401, 'Missing or invalid session token.')
@@ -423,9 +430,7 @@ export function createReviewServer({
       return sendError(res, 403, 'Cross-origin request refused.')
     }
 
-    const path = url.pathname
     if (method === 'GET') {
-      if (path === '/' || path === '/index.html') return serveUi(res)
       if (path === '/api/session') return sendJson(res, 200, await sessionPayload())
       if (path === '/api/events') return openEventStream(res)
       return sendError(res, 404, 'Not found.')

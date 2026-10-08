@@ -41,6 +41,18 @@ describe('level labels in aggregate cells', () => {
   })
 })
 
+describe('categorical stream cells', () => {
+  it('shows a lone evaluator as just its answer, since it always agrees with itself', () => {
+    const one: PropertyAggregate = { type: 'enum', n: 1, distribution: { BUG: 1 }, mode: 'BUG', agreement: 1 }
+    expect(formatStreamCell(one)).toBe('BUG')
+  })
+
+  it('shows agreement and count once there are several evaluators', () => {
+    const three: PropertyAggregate = { type: 'enum', n: 3, distribution: { BUG: 2, OTHER: 1 }, mode: 'BUG', agreement: 2 / 3 }
+    expect(formatStreamCell(three)).toBe('BUG 67% (3)')
+  })
+})
+
 describe('dataset roll-up', () => {
   it('shows multi-select overlap as a percentage beside the raw Jaccard', () => {
     expect(formatRollup({ kind: 'enumSet', nTickets: 250, meanJaccard: 0.692 })).toBe('69% (J 0.69 | n250)')

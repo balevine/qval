@@ -36,9 +36,10 @@ export function formatStreamCell(agg: PropertyAggregate | undefined, p?: EvalPro
       if (agg.n <= 1) return scoreText(agg.mean, p)
       return `${scoreText(agg.mean, p)}${p?.levels ? ' ' : ''}±${agg.sd.toFixed(1)} (${agg.n})`
     case 'boolean':
-      return `${short(agg)} ${Math.round(agg.agreement * 100)}%${agg.n > 1 ? ` (${agg.n})` : ''}`
     case 'enum':
-      return `${short(agg)} ${Math.round(agg.agreement * 100)}%${agg.n > 1 ? ` (${agg.n})` : ''}`
+      // One evaluator always agrees with itself, so the 100% would say nothing.
+      if (agg.n <= 1) return short(agg)
+      return `${short(agg)} ${Math.round(agg.agreement * 100)}% (${agg.n})`
     case 'enumSet': {
       const top = Object.entries(agg.distribution)
         .sort((a, b) => b[1] - a[1])

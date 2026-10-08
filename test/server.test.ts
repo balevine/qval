@@ -126,15 +126,22 @@ describe('tokenMatches', () => {
 // --- The security stack ------------------------------------------------------
 
 describe('access control', () => {
-  it('refuses a missing or wrong token on every route', async () => {
+  it('refuses a missing or wrong token on every API route', async () => {
     const { origin, server } = await start()
-    for (const path of ['/', '/api/session', '/api/events']) {
+    for (const path of ['/api/session', '/api/events']) {
       expect((await fetch(origin + path)).status).toBe(401)
       expect((await fetch(origin + path, { headers: { [TOKEN_HEADER]: 'nope' } })).status).toBe(401)
       // A token of the right length but the wrong bytes must fail like any other.
       const wrong = 'f'.repeat(server.token.length)
       expect((await fetch(origin + path, { headers: { [TOKEN_HEADER]: wrong } })).status).toBe(401)
     }
+  })
+
+  it('serves the page without a token, so a reload (which has stripped it from the URL) still loads', async () => {
+    const { origin } = await start()
+    const page = await fetch(origin + '/')
+    expect(page.status).toBe(200)
+    expect(page.headers.get('content-type')).toMatch(/text\/html/)
   })
 
   it('accepts the token from the query string, which is how the page is first opened', async () => {
