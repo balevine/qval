@@ -4,7 +4,7 @@
 // There is no provider config here. The LLM evaluation runs inside Claude Code with the ambient
 // model, so there is no key, host, model, or parallelism for a user to set.
 
-import { DEFAULT_SCHEMA, normalizeSchema } from './schema.mjs'
+import { DEFAULT_SCHEMA, DEFAULT_SCORER, normalizeSchema, normalizeScorer } from './schema.mjs'
 import { DEFAULT_RULES, normalizeRules } from './rules.mjs'
 
 /** @typedef {import('@shared/types').Settings} Settings */
@@ -12,6 +12,7 @@ import { DEFAULT_RULES, normalizeRules } from './rules.mjs'
 /** @type {Settings} */
 export const DEFAULT_SETTINGS = {
   evaluatorName: '',
+  scorer: DEFAULT_SCORER,
   schema: DEFAULT_SCHEMA.map((p) => ({ ...p })),
   rules: DEFAULT_RULES,
   lastDatasetPath: null
@@ -27,10 +28,14 @@ export const DEFAULT_SETTINGS = {
  */
 export function withDefaults(raw) {
   const r = raw && typeof raw === 'object' ? raw : {}
+  // The schema is normalized under the scorer, so the scorer is read first: a Jev schema keeps its
+  // Jev fields, and a settings file from before scorers existed reads as `claude`.
+  const scorer = normalizeScorer(r.scorer)
 
   return {
     evaluatorName: typeof r.evaluatorName === 'string' ? r.evaluatorName : '',
-    schema: r.schema === undefined ? DEFAULT_SCHEMA.map((p) => ({ ...p })) : normalizeSchema(r.schema),
+    scorer,
+    schema: r.schema === undefined ? DEFAULT_SCHEMA.map((p) => ({ ...p })) : normalizeSchema(r.schema, scorer),
     rules: normalizeRules(r.rules),
     lastDatasetPath: typeof r.lastDatasetPath === 'string' ? r.lastDatasetPath : null
   }

@@ -2,7 +2,7 @@ import { promises as fs } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { atomicWriteJson, readJson } from '@lib/fsUtil.mjs'
+import { atomicWriteJson, atomicWriteText, readJson } from '@lib/fsUtil.mjs'
 
 let dir: string
 beforeEach(async () => {
@@ -65,6 +65,16 @@ describe('atomicWriteJson / readJson', () => {
     expect(read).not.toBeNull()
     expect(typeof read!.n).toBe('number')
     const leftovers = (await fs.readdir(dir)).filter((f) => f.endsWith('.tmp'))
+    expect(leftovers).toEqual([])
+  })
+})
+
+describe('atomicWriteText', () => {
+  it('writes the string exactly, creating parents and leaving no temp file', async () => {
+    const file = join(dir, 'deep', 'RULES.md')
+    await atomicWriteText(file, 'Line one.\n\nLine two.\n')
+    expect(await fs.readFile(file, 'utf-8')).toBe('Line one.\n\nLine two.\n')
+    const leftovers = (await fs.readdir(join(dir, 'deep'))).filter((f) => f.endsWith('.tmp'))
     expect(leftovers).toEqual([])
   })
 })

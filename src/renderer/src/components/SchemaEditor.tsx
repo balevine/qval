@@ -15,7 +15,8 @@ import {
 import { useSettings } from '@/state/SettingsContext'
 import { useSession } from '@/state/SessionContext'
 import { LockNotice } from '@/components/ui/lock-notice'
-import { allowsMultiple, blankProperty, propertyErrors, toCamelKey } from '@lib/schema.mjs'
+import { HelpTooltip } from '@/components/ui/help-tooltip'
+import { allowsMultiple, blankProperty, schemaErrors, toCamelKey } from '@lib/schema.mjs'
 import { configLocked } from '@lib/evalFile.mjs'
 import { cn } from '@/lib/utils'
 import type { EvalProperty, PropertyType } from '@shared/types'
@@ -42,11 +43,19 @@ function cloneProp(p: EvalProperty): EvalProperty {
  * The ordered, editable list of typed output properties. Local draft state is
  * authoritative while the tab is open; each change persists the schema to settings (main
  * normalizes it). Inline validation is advisory. Invalid rows simply aren't persisted.
+ *
+ * Under the `jev` scorer only the label, key, description, and order are editable. Type, options,
+ * multiple, and the score bounds are fixed, and properties cannot be added or removed. A Jev
+ * property carries option definitions keyed by option and a score scale whose bounds are its level
+ * count, so editing any of those here would leave definitions describing answers that no longer
+ * exist, and a new row would have no question at all. A Jev schema is written by drafting or by
+ * hand in `EVAL_SCHEMA.json`. The Jev fields themselves ride along untouched on every save.
  */
 export function SchemaEditor() {
   const { settings, update } = useSettings()
   const { session } = useSession()
   const locked = configLocked(session?.workingFile)
+  const jev = settings?.scorer === 'jev'
   const [rows, setRows] = useState<EditorRow[] | null>(null)
   const nextUid = useRef(0)
 
@@ -123,8 +132,29 @@ export function SchemaEditor() {
     commit(next)
   }
 
+  // Whole-schema validation, because under Jev the question text (instructions plus description)
+  // must differ between rows, and editing a description can make two of them collide.
+  const rowErrors = schemaErrors(
+    rows.map((r) => r.prop),
+    settings.scorer
+  )
+
   return (
     <div className="space-y-3">
+      {jev && !locked ? (
+        <div className="flex items-center justify-between gap-3 border-2 border-ink bg-ink/5 px-3 py-2">
+          <p className="font-mono text-[11px] text-ink/70">
+            Jev schema. Type, options, and scale are fixed here.
+          </p>
+          <HelpTooltip label="About editing a Jev schema">
+            A Jev property carries definitions for each option and a named scale for each score, and this editor
+            does not edit those. Changing a type, an option, or a range here would leave them describing answers
+            that no longer exist, so only the label, key, description, and order can change. To change the rest,
+            draft again with <span className="font-mono">/qval:draft</span> or edit{' '}
+            <span className="font-mono">EVAL_SCHEMA.json</span> by hand before starting a review.
+          </HelpTooltip>
+        </div>
+      ) : null}
       {locked ? (
         <LockNotice>
           Schema is locked. This file already has evaluations, so its scoring criteria are frozen to keep every
@@ -136,8 +166,7 @@ export function SchemaEditor() {
       <fieldset disabled={locked} className={cn('m-0 space-y-3 border-0 p-0', locked && 'opacity-60')}>
       {rows.map((row, i) => {
         const p = row.prop
-        const otherKeys = rows.filter((r) => r.uid !== row.uid).map((r) => r.prop.key.trim()).filter(Boolean)
-        const errors = propertyErrors(p, otherKeys)
+        const errors = rowErrors[i] ?? []
         return (
           <div key={row.uid} className="border-2 border-ink">
             {/* Row header: label · key · reorder/remove */}
@@ -167,9 +196,11 @@ export function SchemaEditor() {
               <IconButton aria-label="Move down" disabled={i === rows.length - 1} onClick={() => move(row.uid, 1)}>
                 <ChevronDown className="h-4 w-4" />
               </IconButton>
-              <IconButton aria-label="Remove property" onClick={() => removeRow(row.uid)}>
-                <Trash2 className="h-4 w-4" />
-              </IconButton>
+              {jev ? null : (
+                <IconButton aria-label="Remove property" onClick={() => removeRow(row.uid)}>
+                  <Trash2 className="h-4 w-4" />
+                </IconButton>
+              )}
             </div>
 
             <div className="space-y-3 px-3 py-3">
@@ -177,7 +208,7 @@ export function SchemaEditor() {
               <div className="flex flex-wrap items-center gap-4">
                 <div className="flex items-center gap-2">
                   <Label className="text-[10px]">Type</Label>
-                  <Select value={p.type} onValueChange={(v) => setType(row.uid, v as PropertyType)}>
+                  <Select value={p.type} disabled={jev} onValueChange={(v) => setType(row.uid, v as PropertyType)}>
                     <SelectTrigger className="w-32">
                       <SelectValue />
                     </SelectTrigger>
@@ -193,6 +224,7 @@ export function SchemaEditor() {
                 {allowsMultiple(p.type) ? (
                   <label className="flex items-center gap-2">
                     <Switch
+                      disabled={jev}
                       checked={!!p.multiple}
                       onCheckedChange={(checked) => setField(row.uid, { multiple: checked || undefined })}
                       aria-label="Allow multiple"
@@ -205,11 +237,26 @@ export function SchemaEditor() {
               </div>
 
               {/* Score bounds */}
-              {p.type === 'score' ? (
+              {p.type === 'score' && p.levels ? (
+                <div className="space-y-1">
+                  <Label className="text-[10px]">Levels · lowest first</Label>
+                  <div className="flex flex-wrap gap-2">
+                    {p.levels.map((l, idx) => (
+                      <span
+                        key={idx}
+                        title={l.description}
+                        className="border-2 border-ink px-2 py-1 font-mono text-xs text-ink/70"
+                      >
+                        {idx} · {l.label}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : p.type === 'score' ? (
                 <div className="flex items-center gap-3">
-                  <NumField label="Min" value={p.min} onChange={(n) => setField(row.uid, { min: n })} />
-                  <NumField label="Max" value={p.max} onChange={(n) => setField(row.uid, { max: n })} />
-                  <NumField label="Step" value={p.step} onChange={(n) => setField(row.uid, { step: n })} />
+                  <NumField label="Min" disabled={jev} value={p.min} onChange={(n) => setField(row.uid, { min: n })} />
+                  <NumField label="Max" disabled={jev} value={p.max} onChange={(n) => setField(row.uid, { max: n })} />
+                  <NumField label="Step" disabled={jev} value={p.step} onChange={(n) => setField(row.uid, { step: n })} />
                 </div>
               ) : null}
 
@@ -223,30 +270,46 @@ export function SchemaEditor() {
                         <input
                           aria-label={`Option ${idx + 1}`}
                           value={opt}
+                          readOnly={jev}
+                          title={p.optionDescriptions?.[opt]}
                           onChange={(e) => setOption(row.uid, idx, e.target.value)}
-                          className="w-28 bg-paper px-2 py-1 font-mono text-xs focus:outline-none"
+                          className={cn('w-28 bg-paper px-2 py-1 font-mono text-xs focus:outline-none', jev && 'text-ink/70')}
                         />
-                        <button
-                          type="button"
-                          aria-label="Remove option"
-                          onClick={() => removeOption(row.uid, idx)}
-                          className="border-l-2 border-ink px-1 py-1 hover:bg-ink hover:text-paper"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
+                        {jev ? null : (
+                          <button
+                            type="button"
+                            aria-label="Remove option"
+                            onClick={() => removeOption(row.uid, idx)}
+                            className="border-l-2 border-ink px-1 py-1 hover:bg-ink hover:text-paper"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        )}
                       </div>
                     ))}
-                    <Button size="sm" variant="outline" onClick={() => addOption(row.uid)}>
-                      <Plus className="h-3.5 w-3.5" />
-                      Option
-                    </Button>
+                    {jev ? null : (
+                      <Button size="sm" variant="outline" onClick={() => addOption(row.uid)}>
+                        <Plus className="h-3.5 w-3.5" />
+                        Option
+                      </Button>
+                    )}
                   </div>
+                </div>
+              ) : null}
+
+              {/* The Jev question, shown so the description can be read beside it. Not edited here. */}
+              {p.instructions ? (
+                <div>
+                  <Caption>Question · asked of Jev</Caption>
+                  <p className="text-xs text-ink/80">{p.instructions}</p>
                 </div>
               ) : null}
 
               {/* Description */}
               <label className="block">
-                <Caption>Description · shown to the human + the LLM</Caption>
+                <Caption>
+                  {jev ? 'Description · part of the Jev question, shown to the human' : 'Description · shown to the human + the LLM'}
+                </Caption>
                 <Input
                   aria-label="Description"
                   placeholder="e.g. How well the agent acknowledged the customer’s feelings."
@@ -269,10 +332,12 @@ export function SchemaEditor() {
         )
       })}
 
-      <Button variant="outline" onClick={addRow}>
-        <Plus className="h-4 w-4" />
-        Add property
-      </Button>
+      {jev ? null : (
+        <Button variant="outline" onClick={addRow}>
+          <Plus className="h-4 w-4" />
+          Add property
+        </Button>
+      )}
       </fieldset>
     </div>
   )
@@ -288,7 +353,17 @@ function Caption({ children }: { children: ReactNode }) {
 }
 
 /** A small labeled numeric input for score bounds. */
-function NumField({ label, value, onChange }: { label: string; value?: number; onChange: (n: number) => void }) {
+function NumField({
+  label,
+  value,
+  disabled,
+  onChange
+}: {
+  label: string
+  value?: number
+  disabled?: boolean
+  onChange: (n: number) => void
+}) {
   return (
     <div className="flex items-center gap-2">
       <Label className="text-[10px]">{label}</Label>
@@ -296,6 +371,7 @@ function NumField({ label, value, onChange }: { label: string; value?: number; o
         type="number"
         aria-label={label}
         value={value ?? ''}
+        disabled={disabled}
         onChange={(e) => onChange(Number(e.target.value))}
         className="w-20"
       />

@@ -7,6 +7,19 @@
 
 // --- Eval schema (the user-defined output properties) ------------------------
 
+/**
+ * What scores an evaluation: `claude` (the ambient model, through subagents) or `jev` (Typesafe's
+ * Jev). Chosen before the schema, part of the config snapshot and, for `jev`, of the config
+ * fingerprint. Anything written before the field existed is `claude`.
+ */
+export type Scorer = 'claude' | 'jev'
+
+/** One named point on a Jev score scale. A scale is listed lowest first. */
+export interface JevLevel {
+  label: string
+  description?: string
+}
+
 /** Base value type of an output property. `multiple` (below) turns any of these into an array. */
 export type PropertyType = 'score' | 'boolean' | 'enum' | 'text'
 
@@ -30,9 +43,35 @@ export interface EvalProperty {
   step?: number
   // type === 'enum':
   options?: string[]
+  // Jev only (kept by normalization when the scorer is `jev`, stripped otherwise):
+  /** The question itself. Required under `jev`. */
+  instructions?: string
+  /** type === 'boolean': what a yes means. */
+  trueDescription?: string
+  /** type === 'boolean': what a no means. */
+  falseDescription?: string
+  /** type === 'enum': the definition of each option, keyed by option. */
+  optionDescriptions?: Record<string, string>
+  /**
+   * type === 'enum' && multiple: each option's own question, keyed by option. Jev is sent it followed
+   * by the option's definition, instead of the shared question. Every option has one, or none does.
+   */
+  optionInstructions?: Record<string, string>
+  /** type === 'enum' && multiple: what a yes means for each option, keyed by option. */
+  optionTrueDescriptions?: Record<string, string>
+  /** type === 'enum' && multiple: what a no means for each option, keyed by option. */
+  optionFalseDescriptions?: Record<string, string>
+  /** type === 'score': the scale, lowest first. Stored as `min: 0`, `max: levels.length - 1`, `step: 1`. */
+  levels?: JevLevel[]
 }
 
 export type EvalSchema = EvalProperty[]
+
+/** The on-disk `EVAL_SCHEMA.json`. A bare `EvalSchema` array is still read, as scorer `claude`. */
+export interface SchemaFile {
+  scorer: Scorer
+  properties: EvalSchema
+}
 
 /** Free-form evaluation context (prose, definitions, and/or a criteria list). */
 export type Rules = string
@@ -91,6 +130,9 @@ export interface EvalResult {
   /** Non-null when the whole ticket failed (llm only). */
   error?: string | null
   issues?: EvalIssue[]
+  /** The model Jev said answered (llm, Jev runs only). Metadata: the evaluator's `model` is the slug
+   *  that was requested, which is what the model lock compares, and this is what actually served it. */
+  reportedModel?: string
 }
 
 /** An independent scorer of the dataset (the LLM run, or a named human). */
@@ -101,8 +143,8 @@ export interface Evaluator {
   kind: EvaluatorKind
   /** Display label (the human name comes from the run config). */
   name: string
-  /** What produced an `llm` evaluator. `'claude-code'` for anything Qval writes now; a file from
-   *  an older release may carry `'ollama'`/`'anthropic'`, which still reads and merges. */
+  /** What produced an `llm` evaluator. `'claude-code'` for a Claude run, `'typesafe'` for a Jev run.
+   *  A file from an older release may carry `'ollama'`/`'anthropic'`, which still reads and merges. */
   provider?: string
   model?: string
   results: EvalResult[]
@@ -118,6 +160,8 @@ export interface DatasetRef {
 /** Snapshot of the config the evaluators used (its fingerprint gates merge). */
 export interface ConfigSnapshot {
   fingerprint: string
+  /** Absent in files written before the field existed, which normalize to `claude`. */
+  scorer: Scorer
   schema: EvalSchema
   rules: string
 }
@@ -216,6 +260,9 @@ export interface AggregateResult {
 export interface Settings {
   /** Display name stamped on the human evaluator. */
   evaluatorName: string
+  /** What the working config is scored by; snapshotted into each eval file. Not editable from the
+   *  browser: it comes from `EVAL_SCHEMA.json` or from the eval file the session opened. */
+  scorer: Scorer
   /** Working output schema; snapshotted into each eval file. */
   schema: EvalSchema
   /** Working free-form rules; snapshotted into each eval file. */

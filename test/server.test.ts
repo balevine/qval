@@ -126,15 +126,22 @@ describe('tokenMatches', () => {
 // --- The security stack ------------------------------------------------------
 
 describe('access control', () => {
-  it('refuses a missing or wrong token on every route', async () => {
+  it('refuses a missing or wrong token on every API route', async () => {
     const { origin, server } = await start()
-    for (const path of ['/', '/api/session', '/api/events']) {
+    for (const path of ['/api/session', '/api/events']) {
       expect((await fetch(origin + path)).status).toBe(401)
       expect((await fetch(origin + path, { headers: { [TOKEN_HEADER]: 'nope' } })).status).toBe(401)
       // A token of the right length but the wrong bytes must fail like any other.
       const wrong = 'f'.repeat(server.token.length)
       expect((await fetch(origin + path, { headers: { [TOKEN_HEADER]: wrong } })).status).toBe(401)
     }
+  })
+
+  it('serves the page without a token, so a reload (which has stripped it from the URL) still loads', async () => {
+    const { origin } = await start()
+    const page = await fetch(origin + '/')
+    expect(page.status).toBe(200)
+    expect(page.headers.get('content-type')).toMatch(/text\/html/)
   })
 
   it('accepts the token from the query string, which is how the page is first opened', async () => {
@@ -235,7 +242,7 @@ describe('POST /api/result', () => {
     expect(human.name).toBe('Ada')
     expect(human.results[0].ticketId).toBe(1)
     // Clamped to the range, and the off-schema key is gone. Human results carry no `issues[]`.
-    // that repair trail belongs to the LLM, and this matches what the app's IPC path persists.
+    // That repair trail belongs to the LLM, and this matches what the app's IPC path persists.
     expect(human.results[0].values).toEqual({ empathy: 5 })
   })
 
@@ -338,6 +345,35 @@ describe('POST /api/config', () => {
   it('refuses an update with nothing in it', async () => {
     const { call } = await start()
     expect((await call('/api/config', { method: 'POST', body: '{}' })).status).toBe(400)
+  })
+
+  it('keeps a Jev schema’s fields through a save from the editor, and never takes the scorer', async () => {
+    // The schema editor sends every property back whole, with only the label or description changed,
+    // so a Jev schema has to survive that round trip with its definitions and levels intact.
+    const { call, settings } = await start()
+    const schema = [
+      { key: 'solved', label: 'Solved', type: 'boolean' as const, instructions: 'Was it solved?', trueDescription: 'Fixed.', falseDescription: 'Not fixed.' },
+      { key: 'topic', label: 'Topic', type: 'enum' as const, options: ['bug', 'billing'], instructions: 'What is it about?', optionDescriptions: { bug: 'A defect.' } },
+      { key: 'tone', label: 'Tone', type: 'score' as const, instructions: 'How was the tone?', levels: [{ label: 'Poor' }, { label: 'Warm', description: 'Kind.' }] }
+    ]
+    const seeded = await settings.set({ scorer: 'jev', schema })
+    const edited = seeded.schema.map((p) => (p.key === 'tone' ? { ...p, label: 'Agent tone', description: 'Judge the replies.' } : p))
+
+    const res = await call('/api/config', {
+      method: 'POST',
+      body: JSON.stringify({ schema: edited, scorer: 'claude' })
+    })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { settings: Settings; session: SessionSnapshot }
+
+    expect(body.settings.scorer).toBe('jev')
+    expect(body.settings.schema).toEqual(edited)
+    const [solved, topic, tone] = body.settings.schema
+    expect(solved.trueDescription).toBe('Fixed.')
+    expect(topic.optionDescriptions).toEqual({ bug: 'A defect.' })
+    expect(tone).toMatchObject({ label: 'Agent tone', min: 0, max: 1, step: 1, levels: [{ label: 'Poor' }, { label: 'Warm', description: 'Kind.' }] })
+    expect(body.session.workingFile.meta.config.scorer).toBe('jev')
+    expect(body.session.workingFile.meta.config.schema).toEqual(edited)
   })
 })
 

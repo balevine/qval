@@ -2,7 +2,7 @@ import { type ReactNode } from 'react'
 import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
-import { formatEvalValue } from '@/lib/format'
+import { answerHint, formatEvalValue, formatPropertyValue } from '@/lib/format'
 import { clampScore } from '@lib/evalValidate.mjs'
 import type { EvalIssue, EvalProperty, EvalSchema, EvalValue, EvalValues } from '@shared/types'
 
@@ -29,8 +29,9 @@ function scoreSteps(p: EvalProperty): number[] | null {
 
 /**
  * Renders one editable field per schema property. Booleans/enums/small scores are
- * click-to-toggle segmented buttons (re-click clears → unscored); larger scores use a number
- * input; text uses a textarea. The LLM's value is shown for reference, clearly labeled.
+ * click-to-toggle segmented buttons (re-click clears → unscored); a score on named levels is
+ * picked by level label; larger scores use a number input; text uses a textarea.
+ * The LLM's value is shown for reference, clearly labeled.
  */
 export function HumanEvalForm({ schema, values, llmValues, llmIssues, onChange }: HumanEvalFormProps) {
   const set = (key: string, value: EvalValue | undefined) => {
@@ -49,13 +50,15 @@ export function HumanEvalForm({ schema, values, llmValues, llmIssues, onChange }
         return (
           <div key={p.key}>
             <div className="font-mono text-xs font-bold uppercase tracking-widest text-ink">{p.label}</div>
+            {/* A Jev property's question, which is what the model was asked, so the human answers it too. */}
+            {p.instructions ? <div className="mt-0.5 text-xs text-ink/80">{p.instructions}</div> : null}
             {p.description ? <div className="mt-0.5 text-[11px] text-ink/50">{p.description}</div> : null}
 
             <div className="mt-2">
               <Field p={p} value={v} onSet={(val) => set(p.key, val)} />
             </div>
 
-            <LlmReference llmValues={llmValues} propKey={p.key} issue={issueByKey.get(p.key)} />
+            <LlmReference llmValues={llmValues} prop={p} issue={issueByKey.get(p.key)} />
           </div>
         )
       })}
@@ -70,13 +73,14 @@ export function HumanEvalForm({ schema, values, llmValues, llmIssues, onChange }
  */
 function LlmReference({
   llmValues,
-  propKey,
+  prop,
   issue
 }: {
   llmValues: EvalValues | null
-  propKey: string
+  prop: EvalProperty
   issue?: EvalIssue
 }) {
+  const propKey = prop.key
   const scored = !!llmValues && propKey in llmValues
   if (!scored && issue?.action !== 'dropped') return null
 
@@ -89,7 +93,7 @@ function LlmReference({
     )
   }
 
-  const value = formatEvalValue(llmValues![propKey])
+  const value = formatPropertyValue(llmValues![propKey], prop)
   const repaired = issue && (issue.action === 'clamped' || issue.action === 'coerced')
   return (
     <LlmLine>
@@ -123,7 +127,19 @@ function IssueMark({ title }: { title: string }) {
   )
 }
 
-function Field({ p, value, onSet }: { p: EvalProperty; value: EvalValue | undefined; onSet: (v: EvalValue | undefined) => void }) {
+function Field(props: { p: EvalProperty; value: EvalValue | undefined; onSet: (v: EvalValue | undefined) => void }) {
+  // The definition of the chosen answer, when a Jev schema carries one. Every option's definition
+  // is also on its button's hover, but a hover is easy to miss and gone on a touch screen.
+  const hint = answerHint(props.p, props.value)
+  return (
+    <>
+      <FieldInput {...props} />
+      {hint ? <div className="mt-1.5 text-[11px] text-ink/60">{hint}</div> : null}
+    </>
+  )
+}
+
+function FieldInput({ p, value, onSet }: { p: EvalProperty; value: EvalValue | undefined; onSet: (v: EvalValue | undefined) => void }) {
   // Multi-select enum → toggle chips (empty array clears to "unscored").
   if (p.type === 'enum' && p.multiple) {
     const arr = Array.isArray(value) ? (value as string[]) : []
@@ -134,7 +150,7 @@ function Field({ p, value, onSet }: { p: EvalProperty; value: EvalValue | undefi
     return (
       <div className="flex flex-wrap gap-2">
         {(p.options ?? []).map((o) => (
-          <Seg key={o} active={arr.includes(o)} onClick={() => toggle(o)}>
+          <Seg key={o} active={arr.includes(o)} title={answerHint(p, o)} onClick={() => toggle(o)}>
             {o}
           </Seg>
         ))}
@@ -146,7 +162,7 @@ function Field({ p, value, onSet }: { p: EvalProperty; value: EvalValue | undefi
     return (
       <div className="flex flex-wrap gap-2">
         {(p.options ?? []).map((o) => (
-          <Seg key={o} active={value === o} onClick={() => onSet(value === o ? undefined : o)}>
+          <Seg key={o} active={value === o} title={answerHint(p, o)} onClick={() => onSet(value === o ? undefined : o)}>
             {o}
           </Seg>
         ))}
@@ -157,12 +173,26 @@ function Field({ p, value, onSet }: { p: EvalProperty; value: EvalValue | undefi
   if (p.type === 'boolean') {
     return (
       <div className="flex gap-2">
-        <Seg active={value === true} onClick={() => onSet(value === true ? undefined : true)}>
+        <Seg active={value === true} title={answerHint(p, true)} onClick={() => onSet(value === true ? undefined : true)}>
           Yes
         </Seg>
-        <Seg active={value === false} onClick={() => onSet(value === false ? undefined : false)}>
+        <Seg active={value === false} title={answerHint(p, false)} onClick={() => onSet(value === false ? undefined : false)}>
           No
         </Seg>
+      </div>
+    )
+  }
+
+  // A score on named levels is picked by label. The stored value is the level's index, which is
+  // what the bounds `0..levels-1` already describe, so aggregation and comparison need nothing new.
+  if (p.type === 'score' && p.levels && p.levels.length > 0) {
+    return (
+      <div className="flex flex-wrap gap-2">
+        {p.levels.map((l, i) => (
+          <Seg key={i} active={value === i} title={l.description} onClick={() => onSet(value === i ? undefined : i)}>
+            {l.label}
+          </Seg>
+        ))}
       </div>
     )
   }
@@ -213,11 +243,23 @@ function Field({ p, value, onSet }: { p: EvalProperty; value: EvalValue | undefi
 }
 
 /** A segmented toggle button (neo-brutalist: inverts when active). */
-function Seg({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
+function Seg({
+  active,
+  onClick,
+  title,
+  children
+}: {
+  active: boolean
+  onClick: () => void
+  /** Hover text, for an answer whose definition the schema carries. */
+  title?: string | null
+  children: ReactNode
+}) {
   return (
     <button
       type="button"
       onClick={onClick}
+      title={title ?? undefined}
       className={cn(
         'min-w-[2.5rem] border-2 border-ink px-3 py-1.5 font-mono text-xs font-bold uppercase tracking-wide transition-colors',
         active ? 'bg-ink text-paper' : 'bg-paper text-ink hover:bg-ink/10'

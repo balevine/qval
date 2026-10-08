@@ -151,11 +151,14 @@ export class Workspace {
     await this.adoptExternalWrite()
     if (!this.workingFile || configLocked(this.workingFile)) return
     const s = await this.settings.get()
-    const fingerprint = await configFingerprint(s.schema, s.rules)
+    const fingerprint = await configFingerprint(s.schema, s.rules, s.scorer)
     if (this.workingFile.meta.config.fingerprint === fingerprint) return
     await this.commitWorkingFile({
       ...this.workingFile,
-      meta: { ...this.workingFile.meta, config: { fingerprint, schema: s.schema, rules: s.rules } }
+      meta: {
+        ...this.workingFile.meta,
+        config: { fingerprint, scorer: s.scorer, schema: s.schema, rules: s.rules }
+      }
     })
   }
 
@@ -168,7 +171,8 @@ export class Workspace {
    * @returns {Promise<void>}
    */
   async hydrateSettingsFromFile(file) {
-    await this.settings.set({ schema: file.meta.config.schema, rules: file.meta.config.rules })
+    const { scorer, schema, rules } = file.meta.config
+    await this.settings.set({ scorer, schema, rules })
   }
 
   /**
@@ -251,7 +255,7 @@ export class Workspace {
     const s = await this.settings.get()
     const [fp, cfp] = await Promise.all([
       datasetFingerprint(tickets),
-      configFingerprint(s.schema, s.rules)
+      configFingerprint(s.schema, s.rules, s.scorer)
     ])
     this.tickets = tickets
     this.datasetFp = fp
@@ -259,7 +263,7 @@ export class Workspace {
       appVersion: this.appVersion,
       now: this.now(),
       dataset: { fingerprint: fp, ticketCount: tickets.length, source },
-      config: { fingerprint: cfp, schema: s.schema, rules: s.rules }
+      config: { fingerprint: cfp, scorer: s.scorer, schema: s.schema, rules: s.rules }
     })
     this.workingPath = null
     this.comparisons = []

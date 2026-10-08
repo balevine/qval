@@ -20,7 +20,7 @@ const WORKING_FILE = {
     createdAt: 'now',
     updatedAt: 'now',
     dataset: { fingerprint: 'd', ticketCount: 0, source: null },
-    config: { fingerprint: 'c', schema: [], rules: '' }
+    config: { fingerprint: 'c', scorer: 'claude', schema: [], rules: '' }
   },
   evaluators: []
 } satisfies EvalFile

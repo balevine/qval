@@ -1,14 +1,14 @@
 # review (Claude Code skill)
 
-A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill that opens [Qval](../../../README.md)'s review UI in your browser. It is the half of Qval a person has to do by hand: writing the schema and the rules, filling in the **human evaluation** ticket by ticket, merging other people's eval files, and reading the human-vs-LLM comparison.
+A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill that opens [Qval](../../../README.md)'s review UI in your browser. It is the half of Qval a person has to do by hand: adjusting the schema and the rules, filling in the **human evaluation** ticket by ticket, merging other people's eval files, and reading the human-vs-LLM comparison.
 
-The LLM half is the sibling skill [`evaluate-tickets`](../evaluate-tickets/README.md). This one runs no model and scores nothing on its own.
+The LLM half is the sibling skill [`evaluate-tickets`](../evaluate-tickets/README.md). This one runs no model and scores nothing on its own. Both come after [`draft`](../draft/README.md), which writes the config they share, and they run in either order.
 
 ## Requirements
 
 - **Claude Code** (the skill runs inside it, and `bin/qval` lands on its PATH while the plugin is enabled).
 - **Node.js** on your `PATH` (`node --version`). No `npm install`: the CLI, the server, and the UI bundle are all dependency-free and ship with the plugin.
-- A **ticket file** in the directory you run it from, or an existing **`*.qval.json`** in its `qval-output/`. Ticket files are found by shape rather than by name, so your own export works as well as a generated set, and a `qbort-output/` subdirectory is searched too. You can also just name the file: `qval serve <path>`.
+- A **ticket file** in the directory you run it from, or an existing **`*.qval.json`** in its `qval-output/`. A new evaluation also needs `EVAL_SCHEMA.json` and `EVAL_RULES.md` from `/qval:draft`. Without them `serve` refuses with `NO_CONFIG`. Ticket files are found by shape rather than by name, so your own export works as well as a generated set, and a `qbort-output/` subdirectory is searched too. You can also just name the file: `qval serve <path>`.
 
 ## Usage
 
@@ -34,7 +34,7 @@ Two files merge only when **both** fingerprints match: the same tickets *and* th
 
 ## Shared config
 
-`serve` seeds a new session's schema and rules from `EVAL_SCHEMA.json` and `EVAL_RULES.md` when they're there, and writes back whatever you ended up using when the session ends, but only if you changed it. So the two skills always score against the same config, whichever one you set it up in, and opening an old eval file just to read it never rewrites the config in your working directory.
+A new evaluation starts from the scorer, schema, and rules in `EVAL_SCHEMA.json` and `EVAL_RULES.md`, which `/qval:draft` wrote. An eval file with no scores yet adopts them too. One with scores keeps the config it was scored under. `serve` writes back whatever you ended up using when the session ends, but only if you changed it. The scorer is shown and never changed in the browser. Under `jev` the schema editor changes only labels, keys, descriptions, and order, because each property carries definitions of its answers that only drafting or a hand edit of `EVAL_SCHEMA.json` changes. So the two skills always score against the same config, whichever one you set it up in, and opening an old eval file just to read it never rewrites the config in your working directory.
 
 ## Files
 

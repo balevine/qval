@@ -10,6 +10,7 @@ import { SchemaEditor } from '@/components/SchemaEditor'
 import { RulesEditor } from '@/components/RulesEditor'
 import { StorageSettings } from '@/components/StorageSettings'
 import { HelpTooltip } from '@/components/ui/help-tooltip'
+import { useSettings } from '@/state/SettingsContext'
 import { cn } from '@/lib/utils'
 
 interface SettingsModalProps {
@@ -23,6 +24,8 @@ interface Tab {
   note?: string
   /** Optional detail shown in a `?` hover tooltip beside the note. */
   help?: ReactNode
+  /** Whether the tab is part of the scored config, which is what the scorer label belongs beside. */
+  config?: boolean
   render: () => ReactNode
 }
 
@@ -43,6 +46,10 @@ const SCHEMA_HELP = (
       <span className="font-mono font-bold text-ink">Description</span>. Guidance shown to the human evaluator{' '}
       <em>and</em> injected into the LLM prompt.
     </li>
+    <li>
+      <span className="font-mono font-bold text-ink">Scorer</span>. What scores the tickets, Claude or Jev. It
+      comes from <span className="font-mono">EVAL_SCHEMA.json</span> or the eval file and is not changed here.
+    </li>
   </ul>
 )
 
@@ -52,12 +59,14 @@ const TABS: Tab[] = [
     label: 'Schema',
     note: 'The typed output properties each ticket is scored on.',
     help: SCHEMA_HELP,
+    config: true,
     render: () => <SchemaEditor />
   },
   {
     id: 'rules',
     label: 'Rules',
     note: 'Free-form context that tells the evaluator how to score.',
+    config: true,
     render: () => <RulesEditor />
   },
   {
@@ -70,6 +79,7 @@ const TABS: Tab[] = [
 
 /** Tabbed settings modal. A menu across the top, one section visible at a time. */
 export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
+  const { settings } = useSettings()
   const [activeId, setActiveId] = useState(TABS[0].id)
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
 
@@ -141,7 +151,17 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
           {active.note || active.help ? (
             <div className="mb-4 flex items-start justify-between gap-3">
               <p className="text-xs text-ink/50">{active.note}</p>
-              {active.help ? <HelpTooltip label={`About ${active.label}`}>{active.help}</HelpTooltip> : null}
+              <div className="flex shrink-0 items-center gap-2">
+                {active.config && settings ? (
+                  // Read-only by design: the scorer decides which property fields exist, so changing
+                  // it here would leave a schema the new scorer cannot read. It is chosen when the
+                  // config is drafted, and the server ignores it on /api/config.
+                  <span className="border-2 border-ink px-2 py-0.5 font-mono text-[10px] font-bold uppercase tracking-widest text-ink">
+                    Scorer: {settings.scorer}
+                  </span>
+                ) : null}
+                {active.help ? <HelpTooltip label={`About ${active.label}`}>{active.help}</HelpTooltip> : null}
+              </div>
             </div>
           ) : null}
           {active.render()}

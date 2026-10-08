@@ -76,7 +76,7 @@ describe('buildStreams', () => {
     appVersion: '0.1.0',
     now: 't',
     dataset: { fingerprint: 'sha256:a', ticketCount: 1, source: null },
-    config: { fingerprint: 'sha256:b', schema: [score], rules: 'r' }
+    config: { fingerprint: 'sha256:b', scorer: 'claude', schema: [score], rules: 'r' }
   })
   const humanNamed = (name: string): ComparisonFile['evaluators'] => [
     { id: 'human', kind: 'human', name, results: [{ ticketId: 1, values: { empathy: 5 }, evaluatedAt: 't' }] }
@@ -104,7 +104,7 @@ describe('aggregateSession', () => {
       appVersion: '0.1.0',
       now: 't',
       dataset: { fingerprint: 'sha256:a', ticketCount: 1, source: null },
-      config: { fingerprint: 'sha256:b', schema: [score], rules: 'r' }
+      config: { fingerprint: 'sha256:b', scorer: 'claude', schema: [score], rules: 'r' }
     })
     // this file: llm empathy=4, human empathy=5
     let file = applyLlmResults(base, { provider: 'anthropic', model: 'm', results: [{ ticketId: 1, values: { empathy: 4 }, evaluatedAt: 't', error: null }] })

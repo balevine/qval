@@ -15,9 +15,10 @@
 
 import { describe, it, expect, afterAll } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import { applyHumanValues, normalizeEvalFile } from '@lib/evalFile.mjs'
 import { configFingerprint, datasetFingerprint } from '@lib/fingerprint.mjs'
@@ -34,6 +35,8 @@ const OUT_DIR = '.qval-run'
 /** Generated artifacts go under `qval-output/` now, not loose in the working directory. */
 const EVAL_FILE = join('qval-output', 'tickets.qval.json')
 const MODEL = 'Opus 5'
+/** Matched on the tail, since the engine prints a realpath and a macOS temp dir is a symlink. */
+const ADOPTED_LINE = /^CONFIG_ADOPTED .*qval-output[/\\]tickets\.qval\.json$/m
 
 const TICKETS: Ticket[] = [
   {
@@ -122,6 +125,9 @@ afterAll(() => {
 const BASE_ENV: NodeJS.ProcessEnv = (() => {
   const env = { ...process.env }
   delete env.ANTHROPIC_MODEL
+  // Likewise a real Typesafe key, which would turn `MISSING_KEY` green. The network is stubbed for
+  // every Jev run regardless (see `jevRun`), so a real key could never be sent anywhere.
+  delete env.TYPESAFE_API_KEY
   return env
 })()
 
@@ -224,10 +230,10 @@ function snapshot(dir: string): string[] {
 
 // --- init + config -----------------------------------------------------------
 // Mostly exit codes: these two commands are control flow for `SKILL.md`. The exception is what
-// `init` writes, which has to be the same starter config a browser-seeded session gets.
+// `init` writes, which has to be the same starter config the review settings default to.
 
 describe('init + config', () => {
-  it('scaffolds the config files and exits 3 so the skill stops for the user to edit', () => {
+  it('writes the starter config files and exits 3 to say it created them', () => {
     const dir = makeDir({ config: false })
 
     const first = engine(dir, ['init'])
@@ -243,11 +249,11 @@ describe('init + config', () => {
     expect(second.out).toContain('READY')
   })
 
-  it('scaffolds the same starter config a review session seeds itself from', () => {
-    // `init` and the review server are two entry points onto one question (what does a new
-    // evaluation start from), and both hash their answer into the config fingerprint. If they ever
-    // disagree, two users who each accepted the defaults get files that refuse to merge, and the
-    // refusal says their criteria differ, which is true and unhelpful. The fingerprint is the
+  it('writes the same starter config the review settings default to', () => {
+    // `init` and the review settings are two consumers of one definition (the starter config), and
+    // both hash their answer into the config fingerprint. If they ever disagree, two users who each
+    // accepted the defaults get files that refuse to merge, and the refusal says their criteria
+    // differ, which is true and unhelpful. The fingerprint is the
     // assertion that matters. The two above it are there to say which half moved.
     const dir = makeDir({ config: false })
     expect(engine(dir, ['init']).code).toBe(3)
@@ -255,19 +261,268 @@ describe('init + config', () => {
     const rules = readFileSync(join(dir, 'EVAL_RULES.md'), 'utf8')
     const schema = JSON.parse(readFileSync(join(dir, 'EVAL_SCHEMA.json'), 'utf8'))
     expect(rules.trim()).toBe(DEFAULT_RULES.trim())
-    expect(schema).toEqual(DEFAULT_SCHEMA)
-    expect(configFingerprint(normalizeSchema(schema), rules)).toBe(
+    expect(schema).toEqual({ scorer: 'claude', properties: DEFAULT_SCHEMA })
+    expect(configFingerprint(normalizeSchema(schema.properties), rules)).toBe(
       configFingerprint(normalizeSchema(DEFAULT_SCHEMA), DEFAULT_RULES)
     )
+  })
+
+  it('reads a bare-array schema file as the claude scorer', () => {
+    const dir = makeDir()
+    const run = engine(dir, ['config'])
+    expect(run.code).toBe(0)
+    expect(run.out).toContain('SCORER claude')
+    expect(run.out).toContain(`FINGERPRINT ${configFingerprint(normalizeSchema(SCHEMA), RULES)}`)
+  })
+
+  it('accepts the wrapped form and fingerprints a claude one exactly like the bare array', () => {
+    const dir = makeDir()
+    writeFileSync(join(dir, 'EVAL_SCHEMA.json'), JSON.stringify({ scorer: 'claude', properties: SCHEMA }, null, 2))
+    const run = engine(dir, ['config'])
+    expect(run.code).toBe(0)
+    expect(run.out).toContain(`FINGERPRINT ${configFingerprint(normalizeSchema(SCHEMA), RULES)}`)
+  })
+
+  it('refuses an unknown scorer rather than reading it as claude', () => {
+    const dir = makeDir()
+    writeFileSync(join(dir, 'EVAL_SCHEMA.json'), JSON.stringify({ scorer: 'gpt', properties: SCHEMA }))
+    const run = engine(dir, ['config'])
+    expect(run.code).toBe(2)
+    expect(run.err).toContain('BAD_SCORER')
+  })
+
+  it('reports what the jev scorer cannot ask, row by row', () => {
+    const dir = makeDir()
+    const properties = [
+      { key: 'notes', label: 'Notes', type: 'text', instructions: 'Anything else?' },
+      { key: 'tone', label: 'Tone', type: 'score', min: 1, max: 5, step: 1, instructions: 'How warm?' },
+      { key: 'a', label: 'A', type: 'boolean', instructions: 'Was it solved?' },
+      { key: 'b', label: 'B', type: 'boolean', instructions: 'Was it solved?' },
+      { key: 'c', label: 'C', type: 'boolean' }
+    ]
+    writeFileSync(join(dir, 'EVAL_SCHEMA.json'), JSON.stringify({ scorer: 'jev', properties }))
+    const run = engine(dir, ['config'])
+    expect(run.code).toBe(2)
+    expect(run.out).toContain('SCORER jev')
+    expect(run.err).toContain('#1 notes: Jev cannot score text properties.')
+    expect(run.err).toContain('#2 tone: A Jev score needs at least 2 levels.')
+    expect(run.err).toMatch(/#3 a: Another property asks Jev the same question/)
+    expect(run.err).toMatch(/#4 b: Another property asks Jev the same question/)
+    expect(run.err).toContain('#5 c: Jev needs instructions')
+  })
+
+  it('passes a valid jev schema, stores a scale as 0..n-1, and keeps the jev fields on --write', () => {
+    const dir = makeDir()
+    const properties = [
+      {
+        key: 'tone', label: 'Tone', type: 'score', instructions: 'How warm was the reply?',
+        levels: [{ label: 'Cold', description: 'Curt.' }, { label: 'Neutral' }, { label: 'Warm' }]
+      },
+      { key: 'solved', label: 'Solved', type: 'boolean', instructions: 'Was it solved?', trueDescription: 'Fixed.' }
+    ]
+    writeFileSync(join(dir, 'EVAL_SCHEMA.json'), JSON.stringify({ scorer: 'jev', properties }))
+    const run = engine(dir, ['config', '--write'])
+    expect(run.code).toBe(0)
+    expect(run.out).toContain('levels Cold | Neutral | Warm')
+    const written = JSON.parse(readFileSync(join(dir, 'EVAL_SCHEMA.json'), 'utf8'))
+    expect(written.scorer).toBe('jev')
+    expect(written.properties[0]).toMatchObject({ min: 0, max: 2, step: 1, instructions: 'How warm was the reply?' })
+    expect(written.properties[0].levels).toHaveLength(3)
+    expect(written.properties[1].trueDescription).toBe('Fixed.')
+    expect(run.out).toContain(`FINGERPRINT ${configFingerprint(normalizeSchema(properties, 'jev'), RULES, 'jev')}`)
+  })
+
+  it('will not plan a jev config onto Claude subagents', () => {
+    const dir = makeDir()
+    const properties = [{ key: 'solved', label: 'Solved', type: 'boolean', instructions: 'Was it solved?' }]
+    writeFileSync(join(dir, 'EVAL_SCHEMA.json'), JSON.stringify({ scorer: 'jev', properties }))
+    const run = plan(dir)
+    expect(run.code).toBe(2)
+    expect(run.err).toContain('WRONG_SCORER')
+    expect(existsSync(join(dir, OUT_DIR, 'run-context.json'))).toBe(false)
   })
 
   it('refuses a schema the model could not satisfy (exit 2, nothing planned)', () => {
     const dir = makeDir()
     writeFileSync(join(dir, 'EVAL_SCHEMA.json'), JSON.stringify([{ key: 'x', label: 'X', type: 'rating' }], null, 2))
-    const run = engine(dir, ['config', '--check'])
+    const run = engine(dir, ['config'])
     expect(run.code).toBe(2)
     expect(run.err).toContain('Type must be one of')
     expect(run.err).toContain('SCHEMA_INVALID')
+  })
+})
+
+// --- draft-check + draft-apply -------------------------------------------------
+// The drafter is the ambient model, so a test stands in for it by writing the draft file, the same
+// way the tests below stand in for subagents by writing batch files.
+
+const USER_RULES = 'Judge the staff, not the customer.\n\nAnswer these questions:\n1. Was it solved?\n2. How warm was the reply?\n'
+
+const JEV_DRAFT = {
+  scorer: 'jev',
+  properties: [
+    {
+      key: 'solved', label: 'Solved', type: 'boolean', instructions: 'Was the customer issue solved?',
+      description: 'Solved means the underlying problem was fixed.', trueDescription: 'Fixed.'
+    },
+    {
+      key: 'tone', label: 'Tone', type: 'score', instructions: 'How warm was the staff reply?',
+      description: 'Warmth of the reply.', levels: [{ label: 'Cold', description: 'Curt.' }, { label: 'Warm' }]
+    }
+  ],
+  rules: 'Judge the staff, not the customer.\n',
+  notes: { tone: 'A range from cold to warm.' },
+  removed: ['the numbered question list']
+}
+
+const CLAUDE_DRAFT = {
+  scorer: 'claude',
+  properties: [{ key: 'solved', label: 'Solved', type: 'boolean', description: 'Was the problem fixed?' }],
+  rules: 'Judge the staff, not the customer.'
+}
+
+function writeDraft(dir: string, draft: unknown, name = join(OUT_DIR, 'draft.json')) {
+  mkdirSync(join(dir, OUT_DIR), { recursive: true })
+  writeFileSync(join(dir, name), JSON.stringify(draft, null, 2))
+}
+
+describe('draft-check + draft-apply', () => {
+  it('checks a jev draft and prints the table, notes, warnings, and what left the rules', () => {
+    const dir = makeDir({ config: false })
+    writeFileSync(join(dir, 'RULES.md'), USER_RULES)
+    writeDraft(dir, JEV_DRAFT)
+    const before = snapshot(dir)
+
+    const run = engine(dir, ['draft-check', '--scorer', 'jev'])
+    expect(run.code).toBe(0)
+    expect(run.outToken).toBe('DRAFT_OK')
+    expect(run.out).toContain('levels Cold | Warm')
+    expect(run.out).toContain('tone: A range from cold to warm.')
+    expect(run.out).toContain('WARNINGS 2')
+    expect(run.out).toContain('solved: This property does not say what yes and no each mean.')
+    expect(run.out).toContain("tone: The level 'Warm' has no definition.")
+    expect(run.out).toContain('REMOVED_FROM_RULES 1')
+    expect(run.out).toContain('the numbered question list')
+    const schema = normalizeSchema(JEV_DRAFT.properties, 'jev')
+    expect(run.out).toContain(`FINGERPRINT ${configFingerprint(schema, JEV_DRAFT.rules, 'jev')}`)
+    // A check writes nothing.
+    expect(snapshot(dir)).toEqual(before)
+  })
+
+  it('refuses a draft for a different scorer than the user chose, and one the scorer cannot satisfy', () => {
+    const dir = makeDir({ config: false })
+    writeDraft(dir, JEV_DRAFT)
+    expect(engine(dir, ['draft-check', '--scorer', 'claude'])).toMatchObject({ code: 2, errToken: 'SCORER_MISMATCH' })
+    expect(engine(dir, ['draft-check'])).toMatchObject({ code: 1, errToken: 'MISSING_SCORER' })
+    expect(engine(dir, ['draft-check', '--scorer', 'gpt'])).toMatchObject({ code: 1, errToken: 'BAD_SCORER' })
+
+    // Jev refuses free text, with the same per-row wording `config` uses.
+    writeDraft(dir, {
+      ...JEV_DRAFT,
+      properties: [...JEV_DRAFT.properties, { key: 'notes', label: 'Notes', type: 'text', instructions: 'Anything else?' }]
+    })
+    const bad = engine(dir, ['draft-check', '--scorer', 'jev'])
+    expect(bad.code).toBe(2)
+    expect(bad.err).toContain('#3 notes: Jev cannot score text properties.')
+    expect(bad.err).toContain('SCHEMA_INVALID')
+
+    writeDraft(dir, { scorer: 'jev', properties: [] })
+    const envelope = engine(dir, ['draft-check', '--scorer', 'jev'])
+    expect(envelope).toMatchObject({ code: 2, errToken: 'DRAFT_INVALID' })
+    expect(envelope.err).toContain('"rules" must be')
+
+    rmSync(join(dir, OUT_DIR, 'draft.json'))
+    expect(engine(dir, ['draft-check', '--scorer', 'jev'])).toMatchObject({ code: 2, errToken: 'MISSING_DRAFT' })
+  })
+
+  it('names Jev fields left on a claude draft', () => {
+    const dir = makeDir({ config: false })
+    writeDraft(dir, { ...CLAUDE_DRAFT, properties: [{ ...CLAUDE_DRAFT.properties[0], instructions: 'Solved?' }] }, 'mine.json')
+    const run = engine(dir, ['draft-check', '--scorer', 'claude', '--draft', 'mine.json'])
+    expect(run.code).toBe(0)
+    expect(run.out).toContain('"instructions" is a Jev field and is ignored under the claude scorer.')
+  })
+
+  it('applies a draft as the config files config reads, and never touches RULES.md', () => {
+    const dir = makeDir({ config: false })
+    writeFileSync(join(dir, 'RULES.md'), USER_RULES)
+    writeDraft(dir, JEV_DRAFT)
+
+    const run = engine(dir, ['draft-apply'])
+    expect(run.code).toBe(0)
+    expect(run.outToken).toBe('APPLIED')
+    expect(run.out).toContain('CREATED')
+    expect(readFileSync(join(dir, 'RULES.md'), 'utf8')).toBe(USER_RULES)
+
+    const written = JSON.parse(readFileSync(join(dir, 'EVAL_SCHEMA.json'), 'utf8'))
+    expect(written).toEqual({ scorer: 'jev', properties: normalizeSchema(JEV_DRAFT.properties, 'jev') })
+    expect(readFileSync(join(dir, 'EVAL_RULES.md'), 'utf8')).toBe(JEV_DRAFT.rules)
+
+    // What was applied is exactly what was checked: the same config, the same fingerprint.
+    const checked = engine(dir, ['config'])
+    expect(checked.code).toBe(0)
+    expect(checked.out).toContain(`FINGERPRINT ${configFingerprint(written.properties, JEV_DRAFT.rules, 'jev')}`)
+
+    // A claude draft replaces it, and the rules gain the trailing newline every config file has.
+    writeDraft(dir, CLAUDE_DRAFT)
+    const again = engine(dir, ['draft-apply'])
+    expect(again.out).toContain('REPLACED')
+    expect(JSON.parse(readFileSync(join(dir, 'EVAL_SCHEMA.json'), 'utf8')).scorer).toBe('claude')
+    expect(readFileSync(join(dir, 'EVAL_RULES.md'), 'utf8')).toBe(`${CLAUDE_DRAFT.rules}\n`)
+  })
+
+  it('re-validates on apply, so an edited draft that no longer passes writes nothing', () => {
+    const dir = makeDir()
+    writeDraft(dir, { ...JEV_DRAFT, properties: [{ key: 'x', label: 'X', type: 'text' }] })
+    const before = snapshot(dir)
+    const run = engine(dir, ['draft-apply'])
+    expect(run.code).toBe(2)
+    expect(run.err).toContain('SCHEMA_INVALID')
+    expect(snapshot(dir)).toEqual(before)
+  })
+
+  it('names eval files scored under other criteria, and leaves them alone', () => {
+    const dir = makeDir()
+    plan(dir)
+    respond(dir, 0, (ids) => answer(ids))
+    expect(assemble(dir).code).toBe(0)
+    const evalBefore = readFileSync(join(dir, EVAL_FILE), 'utf8')
+
+    writeDraft(dir, CLAUDE_DRAFT)
+    const checked = engine(dir, ['draft-check', '--scorer', 'claude'])
+    expect(checked.out).toContain('OTHER_CRITERIA')
+    expect(checked.out).toContain(join('qval-output', 'tickets.qval.json'))
+    const applied = engine(dir, ['draft-apply'])
+    expect(applied.code).toBe(0)
+    expect(applied.out).toContain('OTHER_CRITERIA')
+    expect(readFileSync(join(dir, EVAL_FILE), 'utf8')).toBe(evalBefore)
+
+    // The existing guard still holds: the new criteria do not score into the old file.
+    expect(plan(dir)).toMatchObject({ code: 2, errToken: 'CONFIG_MISMATCH' })
+  })
+
+  it('leaves an eval file with no scores off the list, since the next run adopts the new config', () => {
+    const dir = makeDir()
+    // Subagents that never wrote leave a file whose results are all errors: unscored.
+    plan(dir)
+    assemble(dir)
+
+    writeDraft(dir, CLAUDE_DRAFT)
+    const checked = engine(dir, ['draft-check', '--scorer', 'claude'])
+    expect(checked.code).toBe(0)
+    expect(checked.out).not.toContain('OTHER_CRITERIA')
+  })
+
+  it('refuses to apply while any review session here is live, since it writes the config back', () => {
+    const dir = makeDir()
+    writeDraft(dir, CLAUDE_DRAFT)
+    writeFileSync(
+      join(dir, OUT_DIR, 'review-session.json'),
+      JSON.stringify({ status: 'live', pid: process.pid, url: 'http://127.0.0.1:1/?t=x', workingPath: join(dir, 'other.qval.json') })
+    )
+    const before = snapshot(dir)
+    expect(engine(dir, ['draft-apply'])).toMatchObject({ code: 2, errToken: 'SESSION_LIVE' })
+    expect(snapshot(dir)).toEqual(before)
   })
 })
 
@@ -600,6 +855,55 @@ describe('refusals', () => {
     expect(snapshot(dir)).toEqual(before)
   })
 
+  it('adopts the current config onto an eval file with no scores, and the round assembles under it', () => {
+    const dir = makeDir()
+    // A plan whose subagents never wrote anything leaves a file with error-only results: unscored.
+    plan(dir)
+    assemble(dir)
+    expect(llmOf(readEval(dir)).results.every((r) => r.error)).toBe(true)
+
+    const newSchema = [...SCHEMA, { key: 'followUp', label: 'Follow Up', type: 'boolean' }]
+    writeFileSync(join(dir, 'EVAL_SCHEMA.json'), JSON.stringify(newSchema, null, 2))
+    const newFp = configFingerprint(normalizeSchema(newSchema), RULES)
+
+    const run = plan(dir)
+    expect(run.code).toBe(0)
+    expect(run.outToken).toBe('PLANNED')
+    expect(run.out).toMatch(ADOPTED_LINE)
+    expect(readEval(dir).meta.config.fingerprint).toBe(newFp)
+    expect(readEval(dir).meta.config.schema.map((p) => p.key)).toContain('followUp')
+
+    respond(dir, 0, (ids) => answer(ids, () => ({ ...GOOD, followUp: true })))
+    const done = assemble(dir)
+    expect(done.code).toBe(0)
+    expect(done.out).toContain('EVALUATED 4')
+    const file = readEval(dir)
+    expect(file.meta.config.fingerprint).toBe(newFp)
+    expect(resultFor(file, 1)?.values).toEqual({ ...GOOD, followUp: true })
+
+    // Once scored, the lock holds again.
+    writeFileSync(join(dir, 'EVAL_SCHEMA.json'), JSON.stringify(SCHEMA, null, 2))
+    expect(plan(dir)).toMatchObject({ code: 2, errToken: 'CONFIG_MISMATCH' })
+  })
+
+  it('does not restamp an unscored file when a later guard refuses the plan', () => {
+    const dir = makeDir()
+    plan(dir)
+    writeFileSync(join(dir, 'EVAL_RULES.md'), 'Different rules.\n')
+    writeFileSync(
+      join(dir, OUT_DIR, 'review-session.json'),
+      JSON.stringify({ status: 'live', pid: process.pid, workingPath: join(dir, EVAL_FILE) })
+    )
+    const before = snapshot(dir)
+    expect(plan(dir)).toMatchObject({ code: 2, errToken: 'SESSION_LIVE' })
+    expect(snapshot(dir)).toEqual(before)
+    // A bad batch size is checked after the config, and must not write the restamp either.
+    rmSync(join(dir, OUT_DIR, 'review-session.json'))
+    const without = snapshot(dir)
+    expect(plan(dir, ['--batch-size', '0']).errToken).toBe('BAD_BATCH_SIZE')
+    expect(snapshot(dir)).toEqual(without)
+  })
+
   it('refuses when no model can be resolved, and leaves the directory untouched', () => {
     const dir = makeDir()
     const before = snapshot(dir)
@@ -778,6 +1082,249 @@ describe('refusals', () => {
 })
 
 // --- status ------------------------------------------------------------------
+
+// --- jev ---------------------------------------------------------------------
+// The engine runs as a child process, so the network is replaced in that process: `--import`
+// preloads a stub that swaps `globalThis.fetch` before the engine loads. The engine has no test
+// hook, so production code is exactly what runs here, and nothing can reach a real host.
+
+const STUB = pathToFileURL(resolve(__dirname, 'fixtures/typesafeFetchStub.mjs')).href
+const KEY = 'ts-test-key-7f3a9c'
+
+const JEV_PROPERTIES = [
+  { key: 'resolved', label: 'Resolved', type: 'boolean', instructions: 'Was the issue resolved?' },
+  { key: 'severity', label: 'Severity', type: 'enum', options: ['low', 'high'], instructions: 'How severe is it?' },
+  { key: 'topics', label: 'Topics', type: 'enum', multiple: true, options: ['billing', 'bug'], instructions: 'Which topics apply?' },
+  { key: 'tone', label: 'Tone', type: 'score', instructions: 'How warm was the reply?', levels: [{ label: 'Cold' }, { label: 'Ok' }, { label: 'Warm' }] }
+]
+
+type Reply = 'answer' | { status: number; body?: unknown; echoAuth?: boolean }
+
+interface JevRun extends Run {
+  /** The tickets the stub was asked about, in the order the requests arrived. */
+  sent: string[]
+  requests: Array<{ url: string; auth: string; ticketId: string; request: Record<string, any> }>
+}
+
+function makeJevDir(): string {
+  const dir = makeDir()
+  writeFileSync(join(dir, 'EVAL_SCHEMA.json'), JSON.stringify({ scorer: 'jev', properties: JEV_PROPERTIES }, null, 2))
+  return dir
+}
+
+/** Run `jev` against the stub. The stub's plan and log live beside the directory, not in it, so
+ *  `snapshot(dir)` sees only what the engine wrote. */
+function jevRun(
+  dir: string,
+  extra: string[] = [],
+  opts: { key?: string | null; replies?: { default?: Reply; tickets?: Record<string, Reply> } } = {}
+): JevRun {
+  const planPath = `${dir}-stub-plan.json`
+  const logPath = `${dir}-stub-log.jsonl`
+  writeFileSync(planPath, JSON.stringify(opts.replies ?? {}))
+  rmSync(logPath, { force: true })
+  dirs.push(planPath, logPath)
+  const key = opts.key === undefined ? KEY : opts.key
+  const res = spawnSync(process.execPath, ['--import', STUB, ENGINE, 'jev', '--tickets', 'tickets.json', ...extra], {
+    cwd: dir,
+    encoding: 'utf8',
+    env: { ...BASE_ENV, QVAL_STUB_PLAN: planPath, QVAL_STUB_LOG: logPath, ...(key === null ? {} : { TYPESAFE_API_KEY: key }) }
+  })
+  if (res.error) throw res.error
+  const token = (s: string) => (s.trim().split(/\s+/)[0] ?? '')
+  const requests = existsSync(logPath)
+    ? readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l))
+    : []
+  return {
+    code: res.status ?? -1,
+    out: res.stdout,
+    err: res.stderr,
+    outToken: token(res.stdout),
+    errToken: token(res.stderr),
+    requests,
+    sent: requests.map((r) => r.ticketId)
+  }
+}
+
+/** Every file the engine left under `dir`, as one string, for "the key is nowhere" checks. */
+const everything = (dir: string) => snapshot(dir).join('\n')
+
+describe('jev', () => {
+  it('scores a jev config through Typesafe and records the requested model, with the reported one per result', () => {
+    const dir = makeJevDir()
+    const run = jevRun(dir)
+    expect(run.code).toBe(0)
+    expect(run.outToken).toBe('JEV_DONE')
+    expect(run.out).toMatch(/SENT 4\nCACHED 0\nEVALUATED 4\nDROPPED 0\nFAILED 0/)
+    expect(run.out).toContain('REPORTED_MODEL jev-1.13')
+
+    // One request per ticket, to the real endpoint, the key in the header and nowhere in the body.
+    expect([...run.sent].sort()).toEqual(['1', '2', '3', '4'])
+    for (const r of run.requests) {
+      expect(r.url).toBe('https://api.typesafe.ai/v1/systemone')
+      expect(r.auth).toBe(`Bearer ${KEY}`)
+      expect(r.request.model).toBe('jev-latest')
+      expect(r.request.state.support_guidelines).toBe(RULES.trim())
+      expect(JSON.stringify(r.request)).not.toContain(KEY)
+    }
+
+    const file = readEval(dir)
+    expect(llmOf(file)).toMatchObject({ provider: 'typesafe', model: 'jev-latest', name: 'LLM · jev-latest' })
+    expect(file.meta.config.scorer).toBe('jev')
+    expect(file.meta.config.fingerprint).toBe(configFingerprint(normalizeSchema(JEV_PROPERTIES, 'jev'), RULES, 'jev'))
+    // The stub says noul 0.8, the first option, and a score of 1.4, which snaps to level 1.
+    expect(resultFor(file, 1)).toMatchObject({
+      values: { resolved: true, severity: 'low', topics: ['billing', 'bug'], tone: 1 },
+      reportedModel: 'jev-1.13',
+      issues: [{ key: 'tone', action: 'clamped', original: 1.4 }]
+    })
+
+    // Each raw response is kept, by ticket id, for `--resume`.
+    expect(readdirSync(join(dir, OUT_DIR, 'jev')).sort()).toEqual(['1.json', '2.json', '3.json', '4.json'])
+    expect(run.out + run.err + everything(dir)).not.toContain(KEY)
+  })
+
+  it('refuses without a key, naming only the variable, before any request or write', () => {
+    const dir = makeJevDir()
+    const before = snapshot(dir)
+    const run = jevRun(dir, [], { key: null })
+    expect(run).toMatchObject({ code: 2, errToken: 'MISSING_KEY' })
+    expect(run.err).toContain('TYPESAFE_API_KEY')
+    expect(run.sent).toEqual([])
+    expect(snapshot(dir)).toEqual(before)
+
+    // Blank counts as missing: a key is trimmed before use.
+    expect(jevRun(dir, [], { key: '   ' }).errToken).toBe('MISSING_KEY')
+  })
+
+  it('will not score a claude config, and plan will not score a jev one', () => {
+    const claude = makeDir()
+    const run = jevRun(claude)
+    expect(run).toMatchObject({ code: 2, errToken: 'WRONG_SCORER' })
+    expect(run.err).toContain('`plan`')
+    expect(run.sent).toEqual([])
+    expect(plan(makeJevDir())).toMatchObject({ code: 2, errToken: 'WRONG_SCORER' })
+  })
+
+  it('keeps the key out of everything when an error body echoes it back', () => {
+    const dir = makeJevDir()
+    const run = jevRun(dir, [], { replies: { tickets: { '2': { status: 422, body: 'bad criteria', echoAuth: true } } } })
+    expect(run.code).toBe(0)
+    expect(run.out).toMatch(/EVALUATED 3\n.*\nFAILED 1/s)
+    expect(run.out).toContain('#2 Typesafe answered 422.')
+    expect(run.out).toContain('[redacted]')
+    expect(resultFor(readEval(dir), 2)?.error).toContain('bad criteria')
+    // No response file for a failed request, so `--resume` sends it again.
+    expect(existsSync(join(dir, OUT_DIR, 'jev', '2.json'))).toBe(false)
+    expect(run.out + run.err + everything(dir)).not.toContain(KEY)
+  })
+
+  it('stops sending once the key is refused, and still writes what it has', () => {
+    const dir = makeJevDir()
+    const run = jevRun(dir, ['--concurrency', '1'], { replies: { default: { status: 401, body: 'nope', echoAuth: true } } })
+    expect(run).toMatchObject({ code: 2, errToken: 'KEY_REJECTED' })
+    expect(run.sent).toEqual(['1'])
+    expect(run.out).toContain('UNSENT 3')
+    expect(run.out + run.err + everything(dir)).not.toContain(KEY)
+    expect(resultFor(readEval(dir), 1)?.error).toContain('TYPESAFE_API_KEY')
+    expect(resultFor(readEval(dir), 2)).toBeUndefined()
+  })
+
+  it('resumes from the saved responses, re-sending only what has none, onto a file a human edited meanwhile', () => {
+    const dir = makeJevDir()
+    jevRun(dir, [], { replies: { tickets: { '3': { status: 422, body: 'try later' } } } })
+    expect(resultFor(readEval(dir), 3)?.error).toContain('try later')
+
+    // A review session saved a human score in between. The resumed run adopts that copy.
+    const edited = applyHumanValues(readEval(dir), { name: 'Bri', ticketId: 2, values: { resolved: false }, now: '2030-01-01T00:00:00.000Z' })
+    writeRaw(dir, { ...edited, meta: { ...edited.meta, updatedAt: '2030-01-01T00:00:00.000Z' } })
+
+    const resumed = jevRun(dir, ['--resume'])
+    expect(resumed.code).toBe(0)
+    expect(resumed.out).toContain('resumed')
+    expect(resumed.sent).toEqual(['3'])
+    expect(resumed.out).toMatch(/SENT 1\nCACHED 3\nEVALUATED 4/)
+    const file = readEval(dir)
+    expect(resultFor(file, 3)).toMatchObject({ error: null, values: { resolved: true } })
+    expect(file.evaluators.find((e) => e.kind === 'human')!.results).toEqual([
+      { ticketId: 2, values: { resolved: false }, evaluatedAt: '2030-01-01T00:00:00.000Z' }
+    ])
+  })
+
+  it('refuses to resume a run of a different eval file or different criteria', () => {
+    const dir = makeJevDir()
+    jevRun(dir)
+
+    const other = jevRun(dir, ['--resume', '--eval-file', 'qval-output/other.qval.json'])
+    expect(other).toMatchObject({ code: 2, errToken: 'RESUME_MISMATCH' })
+    expect(other.sent).toEqual([])
+
+    const ctx = readContext(dir)
+    writeFileSync(join(dir, OUT_DIR, 'run-context.json'), JSON.stringify({ ...ctx, configFingerprint: 'sha256:else' }))
+    const before = snapshot(dir)
+    expect(jevRun(dir, ['--resume'])).toMatchObject({ code: 2, errToken: 'RESUME_MISMATCH' })
+    expect(snapshot(dir)).toEqual(before)
+
+    // A Claude run's context is never resumable as a Jev one.
+    writeFileSync(join(dir, OUT_DIR, 'run-context.json'), JSON.stringify({ ...ctx, provider: 'claude-code' }))
+    expect(jevRun(dir, ['--resume']).errToken).toBe('RESUME_MISMATCH')
+  })
+
+  it("deletes the last run's responses when a new run starts, and so does plan", () => {
+    const dir = makeJevDir()
+    jevRun(dir)
+    writeFileSync(join(dir, OUT_DIR, 'jev', '99.json'), '{"answers":{}}')
+    jevRun(dir, ['--mode', 'selection', '--ids', '2'])
+    expect(readdirSync(join(dir, OUT_DIR, 'jev'))).toEqual(['2.json'])
+
+    // The same scratch is per-run for a Claude run too, and the review's files are left alone.
+    writeFileSync(join(dir, OUT_DIR, 'settings.json'), '{}')
+    writeFileSync(join(dir, 'EVAL_SCHEMA.json'), JSON.stringify(SCHEMA))
+    expect(plan(dir, ['--eval-file', 'claude.qval.json']).outToken).toBe('PLANNED')
+    expect(existsSync(join(dir, OUT_DIR, 'jev'))).toBe(false)
+    expect(existsSync(join(dir, OUT_DIR, 'settings.json'))).toBe(true)
+  })
+
+  it('holds the same guards as plan: a live review, the config, and the provider and model pin', () => {
+    const dir = makeJevDir()
+    mkdirSync(join(dir, OUT_DIR), { recursive: true })
+    const session = join(dir, OUT_DIR, 'review-session.json')
+    writeFileSync(session, JSON.stringify({ status: 'live', pid: process.pid, workingPath: join(dir, EVAL_FILE) }))
+    expect(jevRun(dir)).toMatchObject({ code: 2, errToken: 'SESSION_LIVE', sent: [] })
+    rmSync(session)
+
+    jevRun(dir)
+    const raw = readRaw(dir)
+    raw.evaluators[0].model = 'jev-0.9'
+    writeRaw(dir, raw)
+    expect(jevRun(dir)).toMatchObject({ code: 2, errToken: 'MODEL_LOCKED', sent: [] })
+    raw.evaluators[0].provider = 'claude-code'
+    writeRaw(dir, raw)
+    expect(jevRun(dir)).toMatchObject({ code: 2, errToken: 'PROVIDER_LOCKED', sent: [] })
+
+    writeFileSync(join(dir, 'EVAL_RULES.md'), 'Different rules.\n')
+    expect(jevRun(dir)).toMatchObject({ code: 2, errToken: 'CONFIG_MISMATCH', sent: [] })
+  })
+
+  it('adopts the current config onto an eval file with no scores, and scores under it', () => {
+    const dir = makeJevDir()
+    // Every request refused leaves a file whose only results are errors: unscored.
+    jevRun(dir, [], { replies: { default: { status: 422, body: 'not yet' } } })
+    expect(llmOf(readEval(dir)).results.every((r) => r.error)).toBe(true)
+
+    writeFileSync(join(dir, 'EVAL_RULES.md'), 'Different rules.\n')
+    const newFp = configFingerprint(normalizeSchema(JEV_PROPERTIES, 'jev'), 'Different rules.\n', 'jev')
+    const run = jevRun(dir)
+    expect(run.code).toBe(0)
+    expect(run.outToken).toBe('JEV_DONE')
+    expect(run.out).toMatch(ADOPTED_LINE)
+    expect(run.out).toContain('EVALUATED 4')
+    const file = readEval(dir)
+    expect(file.meta.config.fingerprint).toBe(newFp)
+    expect(file.meta.config.rules.trim()).toBe('Different rules.')
+    expect(llmOf(file).results.every((r) => !r.error)).toBe(true)
+  })
+})
 
 describe('status', () => {
   it('reports LLM and human completeness, errors, and dropped values', () => {

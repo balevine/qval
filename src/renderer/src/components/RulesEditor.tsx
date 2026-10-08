@@ -19,6 +19,7 @@ export function RulesEditor() {
   const { settings, update } = useSettings()
   const { session } = useSession()
   const locked = configLocked(session?.workingFile)
+  const jev = settings?.scorer === 'jev'
   const [showPreview, setShowPreview] = useState(false)
 
   const compiled = useMemo(
@@ -38,7 +39,7 @@ export function RulesEditor() {
           Rules are locked. This file already has evaluations, so its scoring guidance is frozen. Scoring the
           same tickets under different rules means a new eval file. Run{' '}
           <span className="font-mono">/qval:evaluate-tickets</span> with{' '}
-          <span className="font-mono">--eval-file &lt;new path&gt;</span>. (You can still preview.)
+          <span className="font-mono">--eval-file &lt;new path&gt;</span>.{jev ? null : ' (You can still preview.)'}
         </LockNotice>
       ) : null}
       <Textarea
@@ -55,12 +56,18 @@ export function RulesEditor() {
         aria-label="Rules"
       />
 
-      <Button size="sm" variant="outline" onClick={() => setShowPreview((v) => !v)}>
-        {showPreview ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-        {showPreview ? 'Hide' : 'Preview'} compiled prompt
-      </Button>
+      {/* The compiled prompt is what Claude is sent. Jev is sent these rules and one question per
+          property instead, so previewing the Claude prompt under Jev would show something no model reads. */}
+      {jev ? (
+        <p className="text-[11px] text-ink/50">Jev is sent these rules with each ticket, and one question per property.</p>
+      ) : (
+        <Button size="sm" variant="outline" onClick={() => setShowPreview((v) => !v)}>
+          {showPreview ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+          {showPreview ? 'Hide' : 'Preview'} compiled prompt
+        </Button>
+      )}
 
-      {showPreview ? (
+      {showPreview && !jev ? (
         <div className="border-2 border-ink">
           <SectionHeader title="Compiled prompt · sample ticket" />
           <div className="max-h-72 overflow-auto bg-paper p-3">

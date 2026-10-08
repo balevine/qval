@@ -27,10 +27,10 @@ import { fileURLToPath } from 'node:url'
 
 import { flagValue, parseArgs } from '../lib/args.mjs'
 import { atomicWriteJson, readJson } from '../lib/fsUtil.mjs'
-import { normalizeSchema } from '../lib/schema.mjs'
+import { isScorer, normalizeSchema, normalizeScorer, parseSchemaFile, schemaFile } from '../lib/schema.mjs'
 import { normalizeRules } from '../lib/rules.mjs'
 import { configFingerprint } from '../lib/fingerprint.mjs'
-import { looksLikeEvalFile, normalizeEvalFile, summarizeEvalFile } from '../lib/evalFile.mjs'
+import { configLocked, looksLikeEvalFile, normalizeEvalFile, summarizeEvalFile } from '../lib/evalFile.mjs'
 import { nowIso, pidAlive } from '../lib/host.mjs'
 import { defaultEvalPath, evalSearchDirs, OUTPUT_DIR, RUN_DIR, samePath } from '../lib/paths.mjs'
 import { parseTicketsFile } from '../lib/tickets.mjs'
@@ -251,31 +251,51 @@ const comparisonSources = (paths) => paths.map((path, i) => ({ id: `c${i + 1}`, 
 // ── the engine's config files, shared both ways ───────────────────────────────
 
 /**
- * Seed the working schema and rules from `EVAL_SCHEMA.json` / `EVAL_RULES.md` when they exist, so a
- * review opened on a bare tickets.json starts from the same config `/qval:evaluate-tickets` would
- * use. Without this the two halves of Qval quietly disagree and the eval files stop merging.
- * Skipped for an eval file, which carries its own authoritative config snapshot.
+ * Read the config `/qval:draft` wrote: `EVAL_SCHEMA.json` and `EVAL_RULES.md`, both of them.
+ * Returns `{ config, missing, problem }`, where `config` is `{ scorer, schema, rules }` only when the
+ * pair is complete and usable.
+ *
+ * Half a config counts as none. A schema without its rules (or rules without a schema) is a draft
+ * that stopped partway, and filling the gap with a built-in default would score against criteria
+ * nobody wrote, which is exactly what this check exists to stop.
+ *
+ * Usable means every row survives normalization. `normalizeSchema` falls back to the built-in
+ * starter schema when nothing does, so without this a broken file would quietly become that schema.
  */
-async function seedConfigFromEngineFiles(settings, dir) {
-  const patch = {}
-  const rawSchema = await readJson(join(dir, SCHEMA_FILE))
-  if (Array.isArray(rawSchema)) {
-    const schema = normalizeSchema(rawSchema)
-    if (schema.length) patch.schema = schema
+async function readEngineConfig(dir) {
+  const missing = [SCHEMA_FILE, RULES_FILE].filter((name) => !existsSync(join(dir, name)))
+  if (missing.length) return { config: null, missing, problem: null }
+
+  const raw = await readJson(join(dir, SCHEMA_FILE))
+  // `{ scorer, properties }`, or a bare array from before the scorer existed, which is `claude`.
+  const parsed = parseSchemaFile(raw)
+  if (!parsed || !isScorer(parsed.scorer) || parsed.properties.length === 0) {
+    return { config: null, missing, problem: `${SCHEMA_FILE} is not a usable schema.` }
   }
-  try {
-    patch.rules = normalizeRules(await fs.readFile(join(dir, RULES_FILE), 'utf8'))
-  } catch {
-    /* no rules file: keep what settings already hold */
+  const scorer = normalizeScorer(parsed.scorer)
+  const schema = normalizeSchema(parsed.properties, scorer)
+  if (schema.length !== parsed.properties.length) {
+    return { config: null, missing, problem: `${SCHEMA_FILE} has properties that are not valid.` }
   }
-  if (Object.keys(patch).length) await settings.set(patch)
+  const rules = normalizeRules(await fs.readFile(join(dir, RULES_FILE), 'utf8'))
+  return { config: { scorer, schema, rules }, missing, problem: null }
+}
+
+/** Why a new evaluation cannot start, in the CLI's usual shape. Exits. */
+function failNoConfig(dir, { missing, problem }) {
+  fail(
+    `NO_CONFIG ${missing.length ? missing.join(', ') : problem}`,
+    missing.length ? `  ${missing.map((m) => `./${m}`).join(' and ')} not found in ${dir}.` : `  ${problem}`,
+    `  A new evaluation needs both ${SCHEMA_FILE} and ${RULES_FILE}. Draft them first with /qval:draft.`,
+    '  Opening an existing *.qval.json does not need them, since it carries its own config.'
+  )
 }
 
 /** The config fingerprint of whatever settings hold right now. Taken before and after the session,
  *  so the write-back below can tell an edit from a no-op. */
 async function currentConfigFingerprint(settings) {
   const s = await settings.get()
-  return configFingerprint(s.schema, s.rules)
+  return configFingerprint(s.schema, s.rules, s.scorer)
 }
 
 /**
@@ -290,9 +310,10 @@ async function currentConfigFingerprint(settings) {
 async function writeConfigForEngine(settings, dir, seededFingerprint) {
   const s = await settings.get()
   if (!s.schema.length) return false
-  if (configFingerprint(s.schema, s.rules) === seededFingerprint) return false
+  if (configFingerprint(s.schema, s.rules, s.scorer) === seededFingerprint) return false
   await fs.mkdir(dir, { recursive: true })
-  await fs.writeFile(join(dir, SCHEMA_FILE), `${JSON.stringify(s.schema, null, 2)}\n`, 'utf8')
+  const body = JSON.stringify(schemaFile(s.scorer, s.schema), null, 2)
+  await fs.writeFile(join(dir, SCHEMA_FILE), `${body}\n`, 'utf8')
   await fs.writeFile(join(dir, RULES_FILE), s.rules.endsWith('\n') ? s.rules : `${s.rules}\n`, 'utf8')
   return true
 }
@@ -343,6 +364,14 @@ async function cmdServe(args) {
 
   const { evalPath, ticketsPaths } = await resolveTarget(args._[0], dir)
   const candidatePaths = resolveCandidatePaths(args, dir, evalPath)
+
+  // A new evaluation is stamped with whatever config it starts from, and that stamp decides what it
+  // can ever be merged with. So it starts from the drafted config or not at all. Checked before
+  // anything is created, so a refusal leaves the directory exactly as it was.
+  if (!existsSync(evalPath)) {
+    const engine = await readEngineConfig(dir)
+    if (!engine.config) failNoConfig(dir, engine)
+  }
 
   const port = flagValue(args, 'port')
   if (port !== null && !/^\d+$/.test(port)) usage(`BAD_PORT ${port}`, '  --port takes a number.')
@@ -486,19 +515,36 @@ async function cmdServeChild(args) {
       await settings.set({ evaluatorName: username })
     }
 
+    const engine = await readEngineConfig(dir)
     if (existsSync(evalPath)) {
       // Resuming: the file's own config snapshot wins, and its dataset is relinked by fingerprint,
       // which is what picks the right one out of the candidates the parent found.
       await workspace.open(evalPath, async () => ticketsPaths)
+      // Unless nothing has been scored against it yet. Then the snapshot records no decision
+      // anyone made, only what the file happened to be created with, and the drafted config is the
+      // one the person means. Restamping it here (rather than on the first score) keeps the file
+      // honest for `/qval:evaluate-tickets`, which plans against the file's own config. A file with
+      // any score keeps its config untouched, so reading an old result never rewrites anything.
+      if (engine.config && !configLocked(workspace.currentWorkingFile())) {
+        await settings.set(engine.config)
+        await workspace.ensureConfigStamped()
+      }
     } else {
-      // A new evaluation, so the parent has already refused anything but a single dataset.
+      // A new evaluation, so the parent has already refused anything but a single dataset, and
+      // anything without a drafted config. Checked again because the files may have gone since.
       if (!ticketsPaths.length) throw new Error(`${evalPath} does not exist and no tickets file was given.`)
-      await seedConfigFromEngineFiles(settings, dir)
+      if (!engine.config) {
+        throw new Error(`No usable ${SCHEMA_FILE} and ${RULES_FILE}. Draft them first with /qval:draft.`)
+      }
+      // The scorer is set alongside the schema so a scorer left in settings by an earlier session
+      // can never be paired with these properties.
+      await settings.set(engine.config)
       await workspace.open(ticketsPaths[0])
       await workspace.save(evalPath)
     }
-    // Taken after the open, so it reflects whatever the session actually starts from (the eval
-    // file's own snapshot, or the seeded engine files). What it is compared against at the end.
+    // Taken after the open (and any restamp), so it reflects whatever the session actually starts
+    // from: the eval file's own snapshot or the drafted files. Adopting the drafted config therefore
+    // matches it, and does not count as an edit to write back. Compared against at the end.
     const seededFingerprint = await currentConfigFingerprint(settings)
     base.datasetPath = (await settings.get()).lastDatasetPath ?? base.datasetPath
     workspace.setComparisonSources(comparisonSources(comparePaths))
